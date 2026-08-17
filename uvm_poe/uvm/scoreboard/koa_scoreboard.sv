@@ -1,20 +1,24 @@
 `uvm_analysis_imp_decl(_in)
 `uvm_analysis_imp_decl(_out)
 
-// scoreboard：KOA 输出参考模型（8 优先级队列 + 组间 SP + 组内 FIFO）
-// - 输入事件按 pri（0..7）入 8 个优先级队列（FIFO，先到先出）
-// - 输出事件：组间 SP 选最高非空组（组号最小），组内 FIFO 出队；比对组号/数据
+// scoreboard：KOA 输出参考模型（5×SBUF × 8 优先级段 + SP/RR）
+// - 输入事件按 (SBUF, pri) 入对应段（stream 映射 SBUF：EXT=OH_EXT/APS_EXT、
+//   INS=OH_INS/APS_INS、ALM、UART_EXT、UART_INS），每段 FIFO
+// - 输出事件：SP 选最高非空 pri 组（组号最小），组内 5 个 SBUF 按 rr_ptr 轮询
+//   （rr_ptr 每拍推进，取最先非空段）出队；比对组号/数据
 // - 保序由 THM 侧负责（KOA 不保序），本 scoreboard 不校验保序键
 class koa_scoreboard extends uvm_scoreboard;
   uvm_analysis_imp_in   #(koa_item, koa_scoreboard) in_imp;
   uvm_analysis_imp_out  #(koa_item, koa_scoreboard) out_imp;
 
-  localparam int N_PRI = 8;
-  localparam int MAXQ  = 64;
+  localparam int N_SBUF = 5;
+  localparam int N_PRI  = 8;
+  localparam int MAXQ   = 512;   // 每个 (SBUF,pri) 段深度（≥KOA 段深 320）
 
   koa_item all_ev[$];
-  koa_item q_items[N_PRI][MAXQ];
-  int      q_head[N_PRI], q_tail[N_PRI], q_cnt[N_PRI];
+  koa_item q_items[N_SBUF][N_PRI][MAXQ];
+  int      q_head[N_SBUF][N_PRI], q_tail[N_SBUF][N_PRI], q_cnt[N_SBUF][N_PRI];
+  int      rr_ptr;
   int      peak_q_occ;
   int      in_cnt, out_cnt;
   int      n_mismatch;
@@ -38,8 +42,20 @@ class koa_scoreboard extends uvm_scoreboard;
     out_cnt++;
   endfunction
 
+  // stream → SBUF 映射（与 KOA 一致）
+  function int stream_sbuf(koa_stream_t s);
+    case (s) inside
+      ST_OH_EXT, ST_APS_EXT: return 0;   // EXT_SBUF
+      ST_OH_INS, ST_APS_INS: return 1;   // INS_SBUF
+      ST_ALM:                return 2;   // ALM_SBUF
+      ST_UART_EXT:           return 3;
+      default:               return 4;   // UART_INS
+    endcase
+  endfunction
+
   function void check_phase(uvm_phase phase);
     string fnames[7];
+    longint cur_t;
     fnames = '{"OH_EXT","OH_INS","APS_EXT","APS_INS","ALM","UART_EXT","UART_INS"};
     // 按时间戳稳定排序；同一时刻 OUT（KOA 输出）排在 IN（入队）之前，
     // 复现 KOA 同拍"先读队首出队、后写入队"的语义
@@ -54,44 +70,68 @@ class koa_scoreboard extends uvm_scoreboard;
       end
       all_ev[j+1] = key;
     end
-    // 模拟
+    // 模拟：按拍推进 rr_ptr（KOA 每拍推进；拍 = ev_time，1ns/拍）
+    // rr 从复位起每拍推进，故初始化为第一个事件时刻的拍数模 5（与 KOA 对齐）
+    cur_t = (all_ev.size() > 0) ? longint'(all_ev[0].ev_time) : -1;
+    rr_ptr = (all_ev.size() > 0) ? int'(all_ev[0].ev_time % N_SBUF) : 0;
     foreach (all_ev[i]) begin
+      if (all_ev[i].ev_time != cur_t) begin
+        if (cur_t != -1) rr_ptr = (rr_ptr + (all_ev[i].ev_time - cur_t)) % N_SBUF;
+        cur_t = all_ev[i].ev_time;
+      end
       if (!all_ev[i].is_out) begin
+        int s = stream_sbuf(all_ev[i].stream);
         int g = all_ev[i].pri;
-        if (q_cnt[g] == MAXQ) begin
-          `uvm_error("SCB", $sformatf("优先级队列 %0d 满（输入超限）", g))
+        if (q_cnt[s][g] == MAXQ) begin
+          `uvm_error("SCB", $sformatf("SBUF%0d 优先级段 %0d 满（输入超限）", s, g))
           n_mismatch++;
         end else begin
-          q_items[g][q_tail[g]] = all_ev[i];
-          q_tail[g] = (q_tail[g] == MAXQ-1) ? 0 : q_tail[g] + 1;
-          q_cnt[g] = q_cnt[g] + 1;
-          if (q_cnt[g] > peak_q_occ) peak_q_occ = q_cnt[g];
+          q_items[s][g][q_tail[s][g]] = all_ev[i];
+          q_tail[s][g] = (q_tail[s][g] == MAXQ-1) ? 0 : q_tail[s][g] + 1;
+          q_cnt[s][g] = q_cnt[s][g] + 1;
+          if (q_cnt[s][g] > peak_q_occ) peak_q_occ = q_cnt[s][g];
         end
       end else begin
+        // SP：最高非空 pri 组（任一 SBUF 的该段非空）
         int g = -1;
-        for (int p = 0; p < N_PRI && g == -1; p++)
-          if (q_cnt[p] != 0) g = p;
+        int s_sel;
+        for (int p = 0; p < N_PRI; p++) begin
+          for (int s = 0; s < N_SBUF; s++)
+            if (q_cnt[s][p] != 0) begin
+              g = p;
+              break;
+            end
+          if (g != -1) break;
+        end
         if (g == -1) begin
           `uvm_error("SCB", $sformatf("输出 KO 时所有优先级队列为空（@%0t）", all_ev[i].ev_time))
           n_mismatch++;
           continue;
         end
+        // 组内 RR：从 rr_ptr 开始找第一个非空 SBUF 段
+        s_sel = rr_ptr;
+        for (int k = 0; k < N_SBUF; k++)
+          if (q_cnt[(rr_ptr + k) % N_SBUF][g] != 0) begin
+            s_sel = (rr_ptr + k) % N_SBUF;
+            break;
+          end
         if (all_ev[i].sbuf !== g)
           `uvm_error("SCB", $sformatf("优先级组不符：输出组%0d 期望组%0d（@%0t）",
                      all_ev[i].sbuf, g, all_ev[i].ev_time))
-        if (all_ev[i].ko_data !== q_items[g][q_head[g]].ko_data)
-          `uvm_error("SCB", $sformatf("KO 数据不符（组%0d，@%0t）", g, all_ev[i].ev_time))
+        if (all_ev[i].ko_data !== q_items[s_sel][g][q_head[s_sel][g]].ko_data)
+          `uvm_error("SCB", $sformatf("KO 数据不符（SBUF%0d 组%0d，@%0t）", s_sel, g, all_ev[i].ev_time))
         n_mismatch += (all_ev[i].sbuf !== g) +
-                      (all_ev[i].ko_data !== q_items[g][q_head[g]].ko_data);
-        q_head[g] = (q_head[g] == MAXQ-1) ? 0 : q_head[g] + 1;
-        q_cnt[g] = q_cnt[g] - 1;
+                      (all_ev[i].ko_data !== q_items[s_sel][g][q_head[s_sel][g]].ko_data);
+        q_head[s_sel][g] = (q_head[s_sel][g] == MAXQ-1) ? 0 : q_head[s_sel][g] + 1;
+        q_cnt[s_sel][g] = q_cnt[s_sel][g] - 1;
       end
     end
     if (in_cnt != out_cnt)
       `uvm_error("SCB", $sformatf("数量不守恒：输入=%0d 输出=%0d", in_cnt, out_cnt))
     for (int p = 0; p < N_PRI; p++)
-      if (q_cnt[p] != 0)
-        `uvm_error("SCB", $sformatf("优先级队列 %0d 未清空：%0d 条", p, q_cnt[p]))
+      for (int s = 0; s < N_SBUF; s++)
+        if (q_cnt[s][p] != 0)
+          `uvm_error("SCB", $sformatf("SBUF%0d 优先级段 %0d 未清空：%0d 条", s, p, q_cnt[s][p]))
     `uvm_info("SCB", $sformatf("输入=%0d 输出=%0d，错配=%0d，优先级队列峰值占用=%0d",
              in_cnt, out_cnt, n_mismatch, peak_q_occ), UVM_LOW)
     for (int f = 0; f < 7; f++)

@@ -4,8 +4,11 @@
 
 模拟 **KOA → POE THM → th_sch → burst_sch → CU/EU 桩 + dma_ctrl 桩** 链路：
 
-- **KOA**：7 条 KO 输入流（5 条 fgOTN/X2X 流带 cid/pos + 2 条串口流），按 **8 组 RR+SP**
-  （8 个优先级队列，组间 SP 0 最高、组内 FIFO）调度，每拍输出 1 条，输出带
+- **KOA**：7 条 KO 输入流（5 条 fgOTN/X2X 流带 cid/pos + 2 条串口流），写入
+  **5 个独立 SBUF**（EXT/INS/ALM/UART_EXT/UART_INS，每个 SBUF 深度 2560，地址按
+  pri 拆成 8 段，每段 320 深 FIFO）；同段同拍多写时 **APS 固定靠前**（OH 让位）。
+  调度为 **组间 SP + 组内 RR**：每拍先选最小编号非空优先级组（0 最高），组内按
+  `rr_ptr`（每拍推进）轮询 5 个 SBUF、取最先非空段出队，每拍输出 1 条，输出带
   `out_stream/out_cid/out_pos`。
 - **保序在 THM**：新 KO 报文查 THM 线程池，同 `(stream,cid,pos)` 活跃线程（非 IDLE）则
   存入 **8 深报文缓存**等待，前序线程释放后按 FIFO 放行；缓存满/线程满 → `ko_rdy=0` 反压。
@@ -60,7 +63,7 @@
 | `WAVE_FILE` | wave.vcd | 波形文件名 |
 | `MAX_THREADS`（RTL） | 64 | THM 线程数 |
 | `BUF_DEPTH`（RTL） | 8 | THM 保序报文缓存深度 |
-| `QUEUE_DEPTH`（RTL） | 16 | KOA 每优先级队列深度 |
+| `SBUF_DEPTH`（RTL） | 2560 | KOA 每个 SBUF 总深度（拆 8 个 pri 段，每段 320） |
 
 ## 运行
 
@@ -72,8 +75,10 @@ TESTNAME=koa_smoke_test RUN_US=30 N_OH_PLANES=4 OH_SLOTS=9520 \
 
 ## 验证
 
-- KOA scoreboard：8 优先级队列参考模型，比对组号/48B 数据，校验数量守恒与队列清空。
-- 实测（30µs，N_CH=8 随机时隙表）：输入 5873 = 输出 5873，错配 0，UVM_ERROR 0。
+- KOA scoreboard：5×SBUF×8 段参考模型（同拍 OUT 先 IN、rr 按拍推进对齐 DUT），
+  比对优先级组号/48B 数据，校验数量守恒与队列清空。
+- 实测（200µs，UART 60Mpps）：输入 39200 = 输出 39200，错配 0，UVM_ERROR 0；
+  压测（30µs，UART 120Mpps）：输入 8249 = 输出 8249，错配 0，UVM_ERROR 0。
 - THM 链路（同场景）：线程内 16327 个 burst 全部发射→完成一一对应（EMIT_CU 12633 +
   EMIT_DMA 3694 = DONE 12633 + DONE_DMA 3694）；pre_read 插队 319 条经 EMIT_DMA 到
   dma_ctrl；队列无 cur_ts 以前的 burst；C 窗资源池申请=归还（FINAL f_cnt=256）无死锁

@@ -78,13 +78,13 @@ flowchart LR
 3. fgOTN/X2X 报文带 cid/pos；串口不带（不保序）。
 4. 通道时隙数支持每平面自定义分配（各通道可不同），激励按通道时隙表生成帧/速率。
 
-## 3. 模块 B：KOA 输入仲裁 + 8 组 RR+SP 调度（保序不在 KOA）
+## 3. 模块 B：KOA 5×SBUF + 8 段 RR+SP 调度（保序不在 KOA）
 
 ### 框图
 
 ```mermaid
 flowchart LR
-  A["KOA 输入(7流仲裁)"] --> S["8组RR+SP调度输出(每拍1条)"]
+  A["7 路输入 → 5 个独立 SBUF<br/>（EXT/INS/ALM/UART_EXT/UART_INS）"] --> S["每 SBUF 按 pri 拆 8 段<br/>组间 SP + 组内 RR（每拍 1 条）"]
   S --> T["输出 KO → THM（保序由 THM 处理）"]
 ```
 
@@ -93,15 +93,23 @@ flowchart LR
 | 变量 | 默认 | 含义 |
 | --- | --- | --- |
 | `key` | {stream[2:0], cid, pos} | 保序键（THM 侧使用） |
-| `rr_ptr` | 0 | 组内 RR 轮询指针 |
+| `rr_ptr` | 0 | 同优先级组内 5 个 SBUF 的 RR 轮询指针（每拍推进） |
 | `out_src[2:0]` | — | 输出优先级组号 0..7（观测） |
+| `SBUF_DEPTH` | 2560 | 每个 SBUF 总深度（地址拆 8 个 pri 段，每段 320 深 FIFO） |
+| `sbuf_cnt[N_SBUF][8]` | 0 | 各 (SBUF, pri) 段占用计数（写 +1 / 读 -1 合并更新） |
 
 ### 处理逻辑
 
-1. KOA 仅做输入仲裁（7 流，流优先级 OH_EXT&gt;…&gt;ALM&gt;UART）与 8 组 RR+SP 调度
-   （组间 SP 0 最高，同组候选按 `rr_ptr` 轮询），每拍输出 1 条 KO 报文给 THM。
-2. **保序不在 KOA**：由 THM 侧完成（见模块 C）。
-3. 输出：`out_vld + 48B + out_pri + out_src(组号) + out_stream/cid/pos`。
+1. KOA 有 5 个独立 SBUF：EXT=OH_EXT+APS_EXT、INS=OH_INS+APS_INS、ALM、
+   UART_EXT、UART_INS；每个 SBUF 的存储按报文 `pri`（随路传入，0 最高）拆成 8 个
+   独立 FIFO 段（每段 320 深，SBUF 总深 2560）。
+2. 业务源报文直写对应 SBUF 的 pri 段（无输入仲裁，SBUF 深度吸收突发）；反压只在
+   对应段满时拉低（per-plane `rdy`）。同段同拍多写时 **APS 固定靠前**：APS 平面
+   （编号小优先）先写，OH 让位。
+3. 调度（每拍 1 条）：先按优先级高低选组（SP，组号最小优先）；同优先级组内对 5 个
+   SBUF 按 `rr_ptr`（每拍推进）轮询，取最先非空的队列段出队。输出 `out_vld + 48B +
+   out_pri + out_src(组号) + out_stream/cid/pos` 给 THM。
+4. **保序不在 KOA**：由 THM 侧完成（见模块 C）。
 
 > 已确认：保留 KOA 的 8 组 RR+SP 调度（优先级调度由 KOA 承担，THM/th_sch 只按线程
 > 优先级做发射调度）。

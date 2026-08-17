@@ -34,7 +34,7 @@ graph TD
   subgraph TB["tb_top"]
     subgraph UVM["UVM 平台（ko_pkg）"]
       DRV["driver ×3（fgOTN/X2X/串口）"] -->|"各流 vld/data/pri/cid/pos"| KOA
-      KOA -->|"out_vld + ack（接收确认）"| MON["monitor"]
+      KOA -->|"out_vld/out_pri/out_src/out_stream"| MON["monitor"]
       MON --> SCB["scoreboard"]
     end
     KOA["koa dut"]
@@ -81,8 +81,9 @@ graph TD
 
 ## 3. 数据流分析
 
-**正向（发射路径）**：UVM driver 经 koa_if 驱动 7 路输入 → KOA 仲裁后按 8 组 RR+SP 出队
-1 条/拍 → THM 保序检查（同 key 活跃则入 8 深缓存）→ 建线程/生成 CSR → th_sch 按
+**正向（发射路径）**：UVM driver 经 koa_if 驱动 7 路输入 → KOA 写入 5×SBUF（每 SBUF
+按 pri 拆 8 段），按组间 SP + 组内 RR 出队 1 条/拍 → THM 保序检查（同 key 活跃则入
+8 深缓存）→ 建线程/生成 CSR → th_sch 按
 (pri,tid) 选 ≤2 发射进 burst 队列 → burst_sch 判公共条件 + c_task 资源条件 →
 i/v 发 CU、c_task 发 dma_ctrl。
 
