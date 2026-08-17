@@ -1,10 +1,10 @@
-﻿<mxfile host="65bd71144e">
+<mxfile host="65bd71144e">
     <diagram id="koa-stim-architecture" name="KOA KO 指令激励方案">
         <mxGraphModel dx="2753" dy="1879" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="800" math="0" shadow="0">
             <root>
                 <mxCell id="0"/>
                 <mxCell id="1" parent="0"/>
-                <mxCell id="title" value="KOA KO 指令激励方案（UVM 平台 uvm_koa，1 GHz 时钟，三路输入源）" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=18;fontStyle=1;" parent="1" vertex="1">
+                <mxCell id="title" value="KOA KO 指令激励方案（UVM 平台 uvm_poe，1 GHz 时钟，三路输入源）" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=18;fontStyle=1;" parent="1" vertex="1">
                     <mxGeometry x="30" y="-180" width="1200" height="40" as="geometry"/>
                 </mxCell>
                 <mxCell id="koa_in_fg" value="fgOTN 开销源" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF6EE;strokeColor=#6FA57F;fontSize=12;verticalAlign=middle;" parent="1" vertex="1">
