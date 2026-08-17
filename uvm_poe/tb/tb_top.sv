@@ -43,7 +43,13 @@ module tb_top;
     .out_src (u_if.out_src),
     .out_stream(u_if.out_stream),
     .out_cid  (u_if.out_cid),
-    .out_pos  (u_if.out_pos)
+    .out_pos  (u_if.out_pos),
+    .ack_vld  (u_if.ack_vld),
+    .ack_stream(u_if.ack_stream),
+    .ack_pri  (u_if.ack_pri),
+    .ack_data (u_if.ack_data),
+    .ack_cid  (u_if.ack_cid),
+    .ack_pos  (u_if.ack_pos)
   );
 
   // ================= POE 链路：KOA → THM → th_sch → burst_sch → CU/EU + dma_ctrl =================

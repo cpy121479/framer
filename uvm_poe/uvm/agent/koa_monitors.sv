@@ -1,4 +1,7 @@
-// 多流输入 monitor：每拍采样 7 组输入端口（vld && rdy），按流上报
+// 多流输入 monitor：每拍在 posedge 后读 KOA 的接收确认（ack_vld + ack_*），
+// 按流上报。ack 由 KOA 在入队拍寄存输出（沿后稳定），与 DUT 实际接收 100% 一致，
+// 不依赖 vld/rdy 握手采样时刻（避免并发多流时的采样歧义）。
+// 反压统计仍用各流 vld && !rdy（仅统计，不影响 scoreboard）。
 class koa_in_monitor extends uvm_monitor;
   uvm_analysis_port #(koa_item) ap;
   `uvm_component_utils(koa_in_monitor)
@@ -32,49 +35,13 @@ class koa_in_monitor extends uvm_monitor;
           ko_pkg::g_tb_cfg.bp_prev[f] = bp[f];
         end
       end
-      // OH_EXT
-      for (int i = 0; i < n_oh; i++)
-        if (ko_pkg::g_tb_cfg.vif.oh_e_vld[i] && ko_pkg::g_tb_cfg.vif.oh_e_rdy[i])
-          sample(ST_OH_EXT, i, ko_pkg::g_tb_cfg.vif.oh_e_pri[i*3 +: 3],
-                 ko_pkg::g_tb_cfg.vif.oh_e_data[i*384 +: 384],
-                 ko_pkg::g_tb_cfg.vif.oh_e_cid[i*17 +: 17],
-                 ko_pkg::g_tb_cfg.vif.oh_e_pos[i*3 +: 3]);
-      // OH_INS
-      for (int i = 0; i < n_oh; i++)
-        if (ko_pkg::g_tb_cfg.vif.oh_i_vld[i] && ko_pkg::g_tb_cfg.vif.oh_i_rdy[i])
-          sample(ST_OH_INS, i, ko_pkg::g_tb_cfg.vif.oh_i_pri[i*3 +: 3],
-                 ko_pkg::g_tb_cfg.vif.oh_i_data[i*384 +: 384],
-                 ko_pkg::g_tb_cfg.vif.oh_i_cid[i*17 +: 17],
-                 ko_pkg::g_tb_cfg.vif.oh_i_pos[i*3 +: 3]);
-      // APS_EXT
-      for (int i = 0; i < n_x2x; i++)
-        if (ko_pkg::g_tb_cfg.vif.aps_e_vld[i] && ko_pkg::g_tb_cfg.vif.aps_e_rdy[i])
-          sample(ST_APS_EXT, i, ko_pkg::g_tb_cfg.vif.aps_e_pri[i*3 +: 3],
-                 ko_pkg::g_tb_cfg.vif.aps_e_data[i*384 +: 384],
-                 ko_pkg::g_tb_cfg.vif.aps_e_cid[i*17 +: 17],
-                 ko_pkg::g_tb_cfg.vif.aps_e_pos[i*3 +: 3]);
-      // APS_INS
-      for (int i = 0; i < n_x2x; i++)
-        if (ko_pkg::g_tb_cfg.vif.aps_i_vld[i] && ko_pkg::g_tb_cfg.vif.aps_i_rdy[i])
-          sample(ST_APS_INS, i, ko_pkg::g_tb_cfg.vif.aps_i_pri[i*3 +: 3],
-                 ko_pkg::g_tb_cfg.vif.aps_i_data[i*384 +: 384],
-                 ko_pkg::g_tb_cfg.vif.aps_i_cid[i*17 +: 17],
-                 ko_pkg::g_tb_cfg.vif.aps_i_pos[i*3 +: 3]);
-      // ALM
-      for (int i = 0; i < n_x2x; i++)
-        if (ko_pkg::g_tb_cfg.vif.alm_vld[i] && ko_pkg::g_tb_cfg.vif.alm_rdy[i])
-          sample(ST_ALM, i, ko_pkg::g_tb_cfg.vif.alm_pri[i*3 +: 3],
-                 ko_pkg::g_tb_cfg.vif.alm_data[i*384 +: 384],
-                 ko_pkg::g_tb_cfg.vif.alm_cid[i*17 +: 17],
-                 ko_pkg::g_tb_cfg.vif.alm_pos[i*3 +: 3]);
-      // UART_EXT
-      if (ko_pkg::g_tb_cfg.vif.u_e_vld && ko_pkg::g_tb_cfg.vif.u_e_rdy)
-        sample(ST_UART_EXT, 0, ko_pkg::g_tb_cfg.vif.u_e_pri,
-               ko_pkg::g_tb_cfg.vif.u_e_data, 17'd0, 3'd0);
-      // UART_INS
-      if (ko_pkg::g_tb_cfg.vif.u_i_vld && ko_pkg::g_tb_cfg.vif.u_i_rdy)
-        sample(ST_UART_INS, 0, ko_pkg::g_tb_cfg.vif.u_i_pri,
-               ko_pkg::g_tb_cfg.vif.u_i_data, 17'd0, 3'd0);
+      // 接收事件：KOA 实际入队（ack 寄存输出，沿后稳定）
+      if (ko_pkg::g_tb_cfg.vif.ack_vld)
+        sample(koa_stream_t'(ko_pkg::g_tb_cfg.vif.ack_stream), 0,
+               ko_pkg::g_tb_cfg.vif.ack_pri,
+               ko_pkg::g_tb_cfg.vif.ack_data,
+               ko_pkg::g_tb_cfg.vif.ack_cid,
+               ko_pkg::g_tb_cfg.vif.ack_pos);
     end
   endtask
 
@@ -87,7 +54,7 @@ class koa_in_monitor extends uvm_monitor;
     it.pos     = pos;
     it.pri     = pri;
     it.ko_data = data;
-    it.ev_time = $time;
+    it.ev_time = $time - 1;   // ack 在沿后 #1 采样，-1 对齐 KOA 入队沿（与 out 基准一致）
     it.is_out  = 1'b0;
     ap.write(it);
   endfunction

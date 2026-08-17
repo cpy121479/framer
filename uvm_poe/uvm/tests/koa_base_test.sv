@@ -41,13 +41,20 @@ class koa_base_test extends uvm_test;
     u_e_seq = koa_uart_seq::type_id::create("u_e_seq"); u_e_seq.dir = 0;
     u_i_seq = koa_uart_seq::type_id::create("u_i_seq"); u_i_seq.dir = 1;
     fork
-      oh_e_seq.start(env.agent.sqr);
-      oh_i_seq.start(env.agent.sqr);
-      aps_e_seq.start(env.agent.sqr);
-      aps_i_seq.start(env.agent.sqr);
-      alm_seq.start(env.agent.sqr);
-      u_e_seq.start(env.agent.sqr);
-      u_i_seq.start(env.agent.sqr);
+      // 3 个业务源独立（最大 3 路并发）；同源多流共享 sequencer（item 串行，不独立）
+      fork
+        oh_e_seq.start(env.agent.sqr[0]);   // fgOTN 开销源
+        oh_i_seq.start(env.agent.sqr[0]);
+      join
+      fork
+        aps_e_seq.start(env.agent.sqr[1]);  // X2X 源
+        aps_i_seq.start(env.agent.sqr[1]);
+        alm_seq.start(env.agent.sqr[1]);
+      join
+      fork
+        u_e_seq.start(env.agent.sqr[2]);    // 串口源
+        u_i_seq.start(env.agent.sqr[2]);
+      join
     join_none
     // 运行窗口 + 输出 drain 裕量
     #(ko_pkg::g_tb_cfg.run_us * 1000.0 + 20000.0);

@@ -41,11 +41,14 @@ class koa_scoreboard extends uvm_scoreboard;
   function void check_phase(uvm_phase phase);
     string fnames[7];
     fnames = '{"OH_EXT","OH_INS","APS_EXT","APS_INS","ALM","UART_EXT","UART_INS"};
-    // 按时间戳稳定排序
+    // 按时间戳稳定排序；同一时刻 OUT（KOA 输出）排在 IN（入队）之前，
+    // 复现 KOA 同拍"先读队首出队、后写入队"的语义
     for (int i = 1; i < all_ev.size(); i++) begin
       koa_item key = all_ev[i];
       int j = i - 1;
-      while (j >= 0 && all_ev[j].ev_time > key.ev_time) begin
+      while (j >= 0 && (all_ev[j].ev_time > key.ev_time ||
+                        (all_ev[j].ev_time == key.ev_time &&
+                         key.is_out && !all_ev[j].is_out))) begin
         all_ev[j+1] = all_ev[j];
         j--;
       end
