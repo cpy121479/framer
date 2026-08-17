@@ -1,0 +1,98 @@
+<mxfile host="app.diagrams.net" agent="codex" version="24.7.17">
+  <diagram id="c-task-dma-flow" name="c_task 二级发射与 dma_ctrl 处理流程">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- ================= 数据结构 / 字段含义 ================= -->
+        <mxCell id="h1" value="数据结构 / 字段含义" style="text;html=1;fontSize=14;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="10" width="360" height="24" as="geometry" />
+        </mxCell>
+
+        <mxCell id="d1" value="burst_t（c_task burst）&#10;━━━━━━━━━━━━━━━━━━━&#10;burst_type = 1（c_task）&#10;c0 / c1 ：任务0/1 有效标志（1=有效 → 需发 dma_ctrl）&#10;dma_id0 / dma_id1 ：任务 id（查 CSR.dma_c）&#10;occ_ts0 / occ_ts1 ：c_task 占据的 ts 数" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="360" height="130" as="geometry" />
+        </mxCell>
+
+        <mxCell id="d2" value="操作指令接口（burst_sch → dma_ctrl，每拍 ≤4 路）&#10;━━━━━━━━━━━━━━━━━━━&#10;th_id + op_type(loc/free) + smc 地址（=op_addr/tag）&#10;· 来源：cw[dma_id] 的 op_type 与 tag&#10;· 每拍最多 2 burst × 2 task = 4 个 c_task → 4 路接口" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="190" width="360" height="90" as="geometry" />
+        </mxCell>
+
+        <mxCell id="d3" value="CSR.cw 条目（每线程 8 项，dma_id 索引）&#10;━━━━━━━━━━━━━━━━━━━&#10;tag + op_type + r + o + c_line_num + start_ts + occ_ts&#10;· smc 地址 = tag；op_type = loc/free&#10;· o=1：该线程占据该 c 窗资源；c_line_num：资源号&#10;· loc 申请成功后更新本条目" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="300" width="360" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="d4" value="C 窗资源条目（FIFO 分配的资源号 0..255）&#10;━━━━━━━━━━━━━━━━━━━&#10;tag + c_line + d + o + r + cnt + ind&#10;· loc 未命中时申请：FIFO 出队资源号，写入操作信息" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="430" width="360" height="90" as="geometry" />
+        </mxCell>
+
+        <mxCell id="d5" value="指令预存资源（16 深缓存）&#10;━━━━━━━━━━━━━━━━━━━&#10;v + op_addr + op_type + th_id + cw_ind&#10;· loc 命中（C 窗已有同 tag）时暂存，等资源释放后转交" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="540" width="360" height="90" as="geometry" />
+        </mxCell>
+
+        <mxCell id="d6" value="SMC 缓存&#10;━━━━━━━━━━━━━━━━━━━&#10;tag 地址 → c_line（free 时经 RBA 写入）" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="650" width="360" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ================= 处理流程 ================= -->
+        <mxCell id="h2" value="处理流程" style="text;html=1;fontSize=14;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="460" y="10" width="520" height="24" as="geometry" />
+        </mxCell>
+
+        <mxCell id="p1" value="二级发射（burst_sch）&#10;· 队头 burst + th_id（burst 队列保存 th_id）&#10;· c0/c1 判断 c_task 是否需发 dma_ctrl&#10;· 需要 → 查 CSR.dma_c[dma_id]：bit=1 生效&#10;· 生效 → 查 cw[dma_id] 取 op_type(loc/free) 与 smc 地址" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="460" y="40" width="520" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="p2" value="生成操作指令（每拍 ≤4 路，带 th_id）&#10;{th_id, op_type, smc} → dma_ctrl" style="rounded=1;whiteSpace=wrap;html=1;align=center;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="460" y="170" width="520" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="p3" value="dma_ctrl 按 op_type 分发" style="rounded=1;whiteSpace=wrap;html=1;align=center;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="460" y="250" width="520" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="p4" value="loc 操作&#10;· 按 smc 地址查 C 窗已有 tag（3 拍，任一拍相同即相同）&#10;├─ 相同 → 存指令预存资源（16 深）&#10;└─ 不同 → 申请 C 窗资源（FIFO 出队资源号）&#10;         ① 资源号写操作信息：tag+c_line+d+o+r+cnt+ind&#10;         ② 更新 CSR.cw：tag+op_type+r+o+c_line_num+start_ts+occ_ts&#10;         ③ RBA 总线读 tag 地址" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="460" y="330" width="520" height="180" as="geometry" />
+        </mxCell>
+
+        <mxCell id="p5" value="free 操作&#10;· 同拍 4 路去重：相同 smc 地址只执行端口号较小者&#10;· th_id + smc 在 cw 8 项中查 cw_ind（c 窗资源号）&#10;· RBA：C 窗资源 c_line → SMC[tag]&#10;· cw 对应项 o=0（释放该 c 窗资源）&#10;· 查指令预存资源同 smc：有 → cw.c_line_num=资源号、o=1&#10;  （将该资源转交给等待的线程）" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="460" y="550" width="520" height="180" as="geometry" />
+        </mxCell>
+
+        <!-- ================= 连线 ================= -->
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=block;html=1;strokeColor=#333333;" edge="1" parent="1" source="p1" target="p2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=block;html=1;strokeColor=#333333;" edge="1" parent="1" source="p2" target="p3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" value="loc" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=block;html=1;strokeColor=#d79b00;fontSize=11;" edge="1" parent="1" source="p3" target="p4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" value="free" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=block;html=1;strokeColor=#d79b00;fontSize=11;" edge="1" parent="1" source="p3" target="p5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- 引用虚线：流程 → 数据结构 -->
+        <mxCell id="r1" value="写操作信息" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=open;dashed=1;html=1;strokeColor=#999999;fontSize=10;" edge="1" parent="1" source="p4" target="d4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r2" value="更新 CSR.cw" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=open;dashed=1;html=1;strokeColor=#999999;fontSize=10;" edge="1" parent="1" source="p4" target="d3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r3" value="存指令预存" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=open;dashed=1;html=1;strokeColor=#999999;fontSize=10;" edge="1" parent="1" source="p4" target="d5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r4" value="RBA 读 tag" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=open;dashed=1;html=1;strokeColor=#999999;fontSize=10;" edge="1" parent="1" source="p4" target="d6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r5" value="RBA 写 c_line" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=open;dashed=1;html=1;strokeColor=#999999;fontSize=10;" edge="1" parent="1" source="p5" target="d6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r6" value="查指令预存" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=open;dashed=1;html=1;strokeColor=#999999;fontSize=10;" edge="1" parent="1" source="p5" target="d5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

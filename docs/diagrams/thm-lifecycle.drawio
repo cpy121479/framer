@@ -1,0 +1,91 @@
+﻿<mxfile host="app.diagrams.net" agent="Codex" version="24.7.0" type="device">
+  <diagram id="thm-lifecycle" name="THM 生命周期">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1300" pageHeight="800" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="idle" value="IDLE&#10;表项空闲" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF6EE;strokeColor=#6FA57F;fontSize=13;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="70" y="260" width="180" height="84" as="geometry"/>
+        </mxCell>
+        <mxCell id="locked" value="LOCKED&#10;已分配线程" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF6EE;strokeColor=#6FA57F;fontSize=13;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="350" y="260" width="200" height="84" as="geometry"/>
+        </mxCell>
+        <mxCell id="wait" value="WAIT_BURST&#10;等待加载 · 地址连续" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF6EE;strokeColor=#6FA57F;fontSize=13;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="650" y="260" width="200" height="84" as="geometry"/>
+        </mxCell>
+        <mxCell id="ready" value="READY&#10;Burst 就绪可发射" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF6EE;strokeColor=#6FA57F;fontSize=13;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="650" y="430" width="200" height="84" as="geometry"/>
+        </mxCell>
+        <mxCell id="issued" value="ISSUED&#10;th_sch 已发射" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF6EE;strokeColor=#6FA57F;fontSize=13;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="900" y="400" width="170" height="84" as="geometry"/>
+        </mxCell>
+        <mxCell id="done" value="COMPLETE&#10;CU 通知释放" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF6EE;strokeColor=#6FA57F;fontSize=13;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="350" y="430" width="200" height="84" as="geometry"/>
+        </mxCell>
+        <mxCell id="t1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;strokeColor=#7C8B9A;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="idle" target="locked">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="t2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;strokeColor=#7C8B9A;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="locked" target="wait">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="t3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;strokeColor=#7C8B9A;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="wait" target="ready">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="t4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;strokeColor=#7C8B9A;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="ready" target="issued">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="t5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;strokeColor=#7C8B9A;exitX=0.5;exitY=0;entryX=0.7;entryY=0;" edge="1" parent="1" source="issued" target="wait">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="985" y="240"/>
+              <mxPoint x="790" y="240"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="t6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;strokeColor=#7C8B9A;exitX=0.5;exitY=1;entryX=0.5;entryY=1;" edge="1" parent="1" source="issued" target="done">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="985" y="540"/>
+              <mxPoint x="450" y="540"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="t7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;strokeColor=#7C8B9A;exitX=0;exitY=0.5;entryX=0.5;entryY=1;" edge="1" parent="1" source="done" target="idle">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="160" y="472"/>
+              <mxPoint x="160" y="344"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="l1" value="收到 KO 报文" style="text;html=1;align=center;verticalAlign=middle;fontSize=12;fontColor=#374151;" vertex="1" parent="1">
+          <mxGeometry x="240" y="270" width="120" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="l2" value="按 POE_HEAD 通知 IFU" style="text;html=1;align=center;verticalAlign=middle;fontSize=12;fontColor=#374151;" vertex="1" parent="1">
+          <mxGeometry x="540" y="270" width="120" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="l3" value="Burst 就绪" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#374151;" vertex="1" parent="1">
+          <mxGeometry x="766" y="376" width="100" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="l4" value="th_sch 发射" style="text;html=1;align=center;verticalAlign=middle;fontSize=12;fontColor=#374151;" vertex="1" parent="1">
+          <mxGeometry x="815" y="450" width="100" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="l5" value="发射完成 → 预取下一 Burst" style="text;html=1;align=center;verticalAlign=middle;fontSize=12;fontColor=#374151;" vertex="1" parent="1">
+          <mxGeometry x="830" y="216" width="180" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="l6" value="CU 执行结束宏指令" style="text;html=1;align=center;verticalAlign=middle;fontSize=12;fontColor=#374151;" vertex="1" parent="1">
+          <mxGeometry x="660" y="540" width="150" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="l7" value="释放线程表项" style="text;html=1;align=center;verticalAlign=middle;fontSize=12;fontColor=#374151;" vertex="1" parent="1">
+          <mxGeometry x="195" y="450" width="120" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="l8" value="32 线程全部锁定 → i_rdy=0 反压 KOIU" style="text;html=1;align=center;verticalAlign=middle;fontSize=13;fontColor=#6B7280;" vertex="1" parent="1">
+          <mxGeometry x="330" y="193" width="240" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="title" value="THM 线程生命周期" style="text;html=1;align=center;verticalAlign=middle;fontSize=16;fontStyle=1;fontColor=#1F2937;" vertex="1" parent="1">
+          <mxGeometry x="470" y="25" width="160" height="30" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

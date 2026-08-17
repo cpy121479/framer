@@ -1,0 +1,12 @@
+# ---- 构建产物 / 仿真输出 ----
+obj_verilator/
+*.vcd
+*.log
+simv.exe
+*.o
+*.d
+*.gch
+
+# ---- Python ----
+__pycache__/
+*.pyc

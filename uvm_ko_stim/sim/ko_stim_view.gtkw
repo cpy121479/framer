@@ -1,0 +1,14 @@
+[title] KO stimulus - fgOTN overhead (uvm_ko_stim)
+[treeopen] tb_top.
+[sst_expanded] tb_top.
+[signal] tb_top.u_if.vld
+[signal] tb_top.u_if.ko_data[383:0]
+[signal] tb_top.u_if.tready
+[signal] tb_top.u_if.sf_vld
+[signal] tb_top.u_if.sf_row[2:0]
+[signal] tb_top.u_if.sf_col[11:0]
+[signal] tb_top.u_if.sf_frame_idx[15:0]
+[signal] tb_top.u_if.fg_vld
+[signal] tb_top.u_if.fg_row[2:0]
+[signal] tb_top.u_if.fg_col[11:0]
+[signal] tb_top.u_if.fg_frame_idx[15:0]
