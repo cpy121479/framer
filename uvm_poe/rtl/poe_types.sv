@@ -8,87 +8,87 @@
 // ============================================================================
 package poe_types_pkg;
 
-  // ---- burst 结构（32b = 4B）：一种结构、两种类型，burst_type 区分 ----
-  // 两种视图字段不完全相同，按类型复用同一比特位（两个 struct 位布局一致，可互 cast）：
-  //  - burst_iv_t（burst_type=0）：tsk_id0/1、sub_pc0/1、ts_len、branch
-  //  - burst_c_t （burst_type=1）：dma_id0/1、occ_ts0/1、rev
-  // 公共字段：st / tr / burst_type / vld_cu / c0 / c1
-  // 位布局：
-  //   [0] st | [1] tr | [5:2] iv{ts_len[2:0],branch} / c{rev} | [6] burst_type |
-  //   [7] vld_cu | [10:8] iv{tsk_id0} / c{dma_id0} | [11] c0 |
-  //   [14:12] iv{tsk_id1} / c{dma_id1} | [15] c1 |
-  //   [23:16] iv{sub_pc0} / c{occ_ts0} | [31:24] iv{sub_pc1} / c{occ_ts1}
-  typedef struct packed {
-    logic        st;         // 是否为所属 ts 的首个 burst
-    logic        tr;         // 是否涉及 O 窗操作
-    logic [2:0]  ts_len;     // 仅 i/v：所属 ts 包含 burst 数
-    logic        branch;     // 仅 i/v：是否可能存在 ts 跳转
-    logic        burst_type; // 0=i/v_task，1=c_task
-    logic        vld_cu;     // 需执行 task 数：0=1 个，1=2 个
-    logic [2:0]  tsk_id0;    // 仅 i/v：任务0 id，查 CSR.vtsk_c
-    logic        c0;         // 任务0 有效标志（0=无效）
-    logic [2:0]  tsk_id1;    // 仅 i/v：任务1 id，查 CSR.vtsk_c
-    logic        c1;         // 任务1 有效标志（0=无效）
-    logic [7:0]  sub_pc0;    // 仅 i/v：task0 指令集指针
-    logic [7:0]  sub_pc1;    // 仅 i/v：task1 指令集指针
-  } burst_iv_t;
+    // ---- burst 结构（32b = 4B）：一种结构、两种类型，burst_type 区分 ----
+    // 两种视图字段不完全相同，按类型复用同一比特位（两个 struct 位布局一致，可互 cast）：
+    //  - burst_iv_t（burst_type=0）：tsk_id0/1、sub_pc0/1、ts_len、branch
+    //  - burst_c_t （burst_type=1）：dma_id0/1、occ_ts0/1、rev
+    // 公共字段：st / tr / burst_type / vld_cu / c0 / c1
+    // 位布局：
+    //   [0] st | [1] tr | [5:2] iv{ts_len[2:0],branch} / c{rev} | [6] burst_type |
+    //   [7] vld_cu | [10:8] iv{tsk_id0} / c{dma_id0} | [11] c0 |
+    //   [14:12] iv{tsk_id1} / c{dma_id1} | [15] c1 |
+    //   [23:16] iv{sub_pc0} / c{occ_ts0} | [31:24] iv{sub_pc1} / c{occ_ts1}
+    typedef struct packed {
+        logic st; // 是否为所属 ts 的首个 burst
+        logic tr; // 是否涉及 O 窗操作
+        logic [2:0] ts_len; // 仅 i/v：所属 ts 包含 burst 数
+        logic branch; // 仅 i/v：是否可能存在 ts 跳转
+        logic burst_type; // 0=i/v_task，1=c_task
+        logic vld_cu; // 需执行 task 数：0=1 个，1=2 个
+        logic [2:0] tsk_id0; // 仅 i/v：任务0 id，查 CSR.vtsk_c
+        logic c0; // 任务0 有效标志（0=无效）
+        logic [2:0] tsk_id1; // 仅 i/v：任务1 id，查 CSR.vtsk_c
+        logic c1; // 任务1 有效标志（0=无效）
+        logic [7:0] sub_pc0; // 仅 i/v：task0 指令集指针
+        logic [7:0] sub_pc1; // 仅 i/v：task1 指令集指针
+    } burst_iv_t;
 
-  typedef struct packed {
-    logic        st;         // 是否为所属 ts 的首个 burst
-    logic        tr;         // 是否涉及 O 窗操作
-    logic [3:0]  rev;        // 仅 c_task：保留位
-    logic        burst_type; // 0=i/v_task，1=c_task
-    logic        vld_cu;     // 需执行 task 数：0=1 个，1=2 个
-    logic [2:0]  dma_id0;    // 仅 c_task：任务0 id，查 CSR.dma_c
-    logic        c0;         // 任务0 有效标志（0=无效）
-    logic [2:0]  dma_id1;    // 仅 c_task：任务1 id，查 CSR.dma_c
-    logic        c1;         // 任务1 有效标志（0=无效）
-    logic [7:0]  occ_ts0;    // 仅 c_task：task0 占据的 ts 数
-    logic [7:0]  occ_ts1;    // 仅 c_task：task1 占据的 ts 数
-  } burst_c_t;
+    typedef struct packed {
+        logic st; // 是否为所属 ts 的首个 burst
+        logic tr; // 是否涉及 O 窗操作
+        logic [3:0] rev; // 仅 c_task：保留位
+        logic burst_type; // 0=i/v_task，1=c_task
+        logic vld_cu; // 需执行 task 数：0=1 个，1=2 个
+        logic [2:0] dma_id0; // 仅 c_task：任务0 id，查 CSR.dma_c
+        logic c0; // 任务0 有效标志（0=无效）
+        logic [2:0] dma_id1; // 仅 c_task：任务1 id，查 CSR.dma_c
+        logic c1; // 任务1 有效标志（0=无效）
+        logic [7:0] occ_ts0; // 仅 c_task：task0 占据的 ts 数
+        logic [7:0] occ_ts1; // 仅 c_task：task1 占据的 ts 数
+    } burst_c_t;
 
-  localparam int BURST_W = 32;
+    localparam int BURST_W = 32;
 
-  // ---- CSR 表项（61B = 488bit）：建线程时同步生成 ----
-  typedef struct packed {
-    logic [7:0]   err;         // 1B：线程错误指示（默认 0，刷新条件待定）
-    logic [63:0]  ccr;         // 8B：待定
-    logic [47:0]  sys_ts;      // 6B：系统时戳（线程启动时间）
-    logic [5:0]   th_id;       // 6bit：线程 id（64 线程）
-    logic [7:0]   th_stat;     // 1B：线程状态（IDLE/READY/ISSUED/DONE）
-    logic [7:0]   o_mes;       // 1B：O 窗操作/状态指示（语义待定）
-    logic [7:0]   cur_ts;      // 1B：当前 ts（与 THM cur_ts 同步）
-    logic [7:0]   vtsk_c;      // 1B：i/v 任务执行掩码（tsk_id 查询）
-    logic [7:0]   dma_c;       // 1B：c_task 执行掩码（dma_id 查询，bit i 对应 cw[i]）
-    logic [63:0]  tw;          // 8*1B：待定
-    logic [8*48-1:0] cw;       // 8×6B：c_task 操作表（dma_id 索引，条目见 cw_entry_t）
-  } csr_t;
+    // ---- CSR 表项（61B = 488bit）：建线程时同步生成 ----
+    typedef struct packed {
+        logic [7:0] err; // 1B：线程错误指示（默认 0，刷新条件待定）
+        logic [63:0] ccr; // 8B：待定
+        logic [47:0] sys_ts; // 6B：系统时戳（线程启动时间）
+        logic [5:0] th_id; // 6bit：线程 id（64 线程）
+        logic [7:0] th_stat; // 1B：线程状态（IDLE/READY/ISSUED/DONE）
+        logic [7:0] o_mes; // 1B：O 窗操作/状态指示（语义待定）
+        logic [7:0] cur_ts; // 1B：当前 ts（与 THM cur_ts 同步）
+        logic [7:0] vtsk_c; // 1B：i/v 任务执行掩码（tsk_id 查询）
+        logic [7:0] dma_c; // 1B：c_task 执行掩码（dma_id 查询，bit i 对应 cw[i]）
+        logic [63:0] tw; // 8*1B：待定
+        logic [8*48-1:0] cw; // 8×6B：c_task 操作表（dma_id 索引，条目见 cw_entry_t）
+    } csr_t;
 
-  // ---- CSR.cw 条目（6B = 48bit） ----
-  typedef struct packed {
-    logic [19:0] tag;        // smc 地址（= op_addr）
-    logic        op_type;    // loc/free：0=loc（申请），1=free（释放）
-    logic        r;          // c_line 有效（smc 读出刷新 c 窗 c_line 后写 1）
-    logic        o;          // 1=该线程占据该 c 窗资源
-    logic [7:0]  c_line_num; // c 窗资源号（64×4=256 个资源）
-    logic [7:0]  start_ts;   // 起始 ts
-    logic [7:0]  occ_ts;     // 占据 ts 数
-    logic        rsv;        // 保留
-  } cw_entry_t;
+    // ---- CSR.cw 条目（6B = 48bit） ----
+    typedef struct packed {
+        logic [19:0] tag; // smc 地址（= op_addr）
+        logic op_type; // loc/free：0=loc（申请），1=free（释放）
+        logic r; // c_line 有效（smc 读出刷新 c 窗 c_line 后写 1）
+        logic o; // 1=该线程占据该 c 窗资源
+        logic [7:0] c_line_num; // c 窗资源号（64×4=256 个资源）
+        logic [7:0] start_ts; // 起始 ts
+        logic [7:0] occ_ts; // 占据 ts 数
+        logic rsv; // 保留
+    } cw_entry_t;
 
-  // ---- C 窗资源条目（168bit = 21B） ----
-  typedef struct packed {
-    logic [19:0]  tag;       // smc 地址
-    logic [127:0] c_line;    // 行数据（free 时经 RBA 写 SMC[tag]）
-    logic         d;         // dirty：申请后 0，CU 改写 c_line 后 1
-    logic         o;         // 占用标志：申请到资源后写 1
-    logic         r;         // c_line 有效：smc 读出刷新 c 窗 c_line 后写 1
-    logic [8:0]   cnt;       // 老化计数：超上限强制释放（o=0，资源号入 FIFO）
-    logic [7:0]   ind;       // c 窗资源号（64×4=256 个资源）
-  } c_wnd_entry_t;
+    // ---- C 窗资源条目（168bit = 21B） ----
+    typedef struct packed {
+        logic [19:0] tag; // smc 地址
+        logic [127:0] c_line; // 行数据（free 时经 RBA 写 SMC[tag]）
+        logic d; // dirty：申请后 0，CU 改写 c_line 后 1
+        logic o; // 占用标志：申请到资源后写 1
+        logic r; // c_line 有效：smc 读出刷新 c 窗 c_line 后写 1
+        logic [8:0] cnt; // 老化计数：超上限强制释放（o=0，资源号入 FIFO）
+        logic [7:0] ind; // c 窗资源号（64×4=256 个资源）
+    } c_wnd_entry_t;
 
-  localparam int CSR_W    = 8+64+48+6+8+8+8+8+8+64+384;
-  localparam int CW_ENTRY_W = 48;
-  localparam int C_WND_ENTRY_W = 168;
+    localparam int CSR_W = 8+64+48+6+8+8+8+8+8+64+384;
+    localparam int CW_ENTRY_W = 48;
+    localparam int C_WND_ENTRY_W = 168;
 
 endpackage
