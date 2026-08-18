@@ -6,7 +6,9 @@
 
 - **KOA**：7 条 KO 输入流（5 条 fgOTN/X2X 流带 cid/pos + 2 条串口流），写入
   **5 个独立 SBUF**（EXT/INS/ALM/UART_EXT/UART_INS，每个 SBUF 深度 2560，地址按
-  pri 拆成 8 段，每段 320 深 FIFO）；同段同拍多写时 **APS 固定靠前**（OH 让位）。
+  pri 拆成 8 段，每段 320 深 FIFO）；**同段合并向量写**：同段同拍可写多条
+  （`MAX_WR_SEG` 上限），写入顺序固定 APS 类（编小优先）→ OH 类（编小优先），
+  空间不足时排在后面的让位（rdy=0、vld 保持不丢）。
   调度为 **组间 SP + 组内 RR**：每拍先选最小编号非空优先级组（0 最高），组内按
   `rr_ptr`（每拍推进）轮询 5 个 SBUF、取最先非空段出队，每拍输出 1 条，输出带
   `out_stream/out_cid/out_pos`。
@@ -64,6 +66,7 @@
 | `MAX_THREADS`（RTL） | 64 | THM 线程数 |
 | `BUF_DEPTH`（RTL） | 8 | THM 保序报文缓存深度 |
 | `SBUF_DEPTH`（RTL） | 2560 | KOA 每个 SBUF 总深度（拆 8 个 pri 段，每段 320） |
+| `MAX_WR_SEG`（RTL） | 16 | KOA 每段每拍合并写入条数上限（8 APS + 4 OH 同段最坏 12） |
 
 ## 运行
 

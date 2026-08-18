@@ -104,8 +104,10 @@ flowchart LR
    UART_EXT、UART_INS；每个 SBUF 的存储按报文 `pri`（随路传入，0 最高）拆成 8 个
    独立 FIFO 段（每段 320 深，SBUF 总深 2560）。
 2. 业务源报文直写对应 SBUF 的 pri 段（无输入仲裁，SBUF 深度吸收突发）；反压只在
-   对应段满时拉低（per-plane `rdy`）。同段同拍多写时 **APS 固定靠前**：APS 平面
-   （编号小优先）先写，OH 让位。
+   对应段满时拉低（per-plane `rdy`）。**同段合并向量写**：同段同拍可写多条
+   （`MAX_WR_SEG` 上限），写入顺序固定 **APS 类（编小优先）→ OH 类（编小优先）**，
+   段剩余空间不足时排在后面的候选让位（rdy=0、vld 保持不丢）；tail 按实际写入
+   条数推进，cnt 按条数累加。
 3. 调度（每拍 1 条）：先按优先级高低选组（SP，组号最小优先）；同优先级组内对 5 个
    SBUF 按 `rr_ptr`（每拍推进）轮询，取最先非空的队列段出队。输出 `out_vld + 48B +
    out_pri + out_src(组号) + out_stream/cid/pos` 给 THM。

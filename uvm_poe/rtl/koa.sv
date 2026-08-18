@@ -1,18 +1,20 @@
 // ============================================================================
-// KOA 行为模型 v5：5×SBUF + RR+SP 调度
+// KOA 行为模型 v6：5×SBUF + 同段合并向量写 + RR+SP 调度
 // 结构（对应方案图）：
 // - 5 个独立 SBUF（EXT/INS/ALM/UART_EXT/UART_INS，深度 SBUF_DEPTH=2560），
-//   每个 SBUF 的存储按优先级拆成 8 个队列（pri 0..7，0 最高）：
-//     EXT_SBUF      <- OH_EXT + APS_EXT（多写 1 读）
-//     INS_SBUF      <- OH_INS + APS_INS（多写 1 读）
+//   每个 SBUF 的存储按优先级拆成 8 个队列段（pri 0..7，0 最高，每段 320 深）：
+//     EXT_SBUF      <- OH_EXT + APS_EXT
+//     INS_SBUF      <- OH_INS + APS_INS
 //     ALM_SBUF      <- ALM
 //     UART_EXT_SBUF <- UART_EXT
 //     UART_INS_SBUF <- UART_INS
-// - 业务源报文直接写入对应 SBUF 的 pri 段（无输入仲裁），SBUF 深度吸收突发；
-//   反压只在对应段满时拉低（per-plane rdy）。同段同拍多写时按固定顺序：
-//   APS 平面（编号小优先）固定优先于 OH 平面，OH 让位。
-// - 调度（输出，每拍 1 条）：先按优先级高低选组（SP，组号 0..7）；
-//   同优先级组内对 5 个 SBUF 轮询（rr_ptr 每拍推进），取最先非空的队列出队。
+// - 写入（同段合并向量写）：业务源 vld 直写对应段，不做跨流仲裁；
+//   同段同拍可合并写多条（MAX_WR_SEG 上限），写入顺序固定为
+//   APS 类（编小优先）→ OH 类（编小优先）→ UART，保持"APS 固定靠前"；
+//   段剩余空间不足时，排在后面的候选让位（rdy=0、vld 保持，不丢报文）。
+//   每段每拍实际写入条数 = wr_cnt[s][g]，tail 按条数推进，cnt 按条数累加。
+// - 读（每拍 1 条）：先按优先级高低选组（SP，组号 0..7），组内对 5 个 SBUF
+//   按 rr_ptr（每拍推进）轮询，取最先非空的队列段出队。
 // - 输出：out_vld + 48B + out_pri(组号) + out_src(组号) + out_stream/cid/pos
 //   （保序键 stream+cid+pos 供 THM 使用；pri 随路传入决定段）。
 // ============================================================================
@@ -22,7 +24,8 @@ module koa #(
   parameter int CID_W           = 17,   // 通道号位宽（1 时隙粒度）
   parameter int POS_W           = 3,    // 开销位置位宽（OH 0..7 / APS 0 / ALM 0..3）
   parameter int KO_W            = 384,  // KO 报文位宽（48B）
-  parameter int SBUF_DEPTH      = 2560  // 每个 SBUF 总深度（地址拆成 8 个 pri 队列）
+  parameter int SBUF_DEPTH      = 2560, // 每个 SBUF 总深度（地址拆成 8 个 pri 段）
+  parameter int MAX_WR_SEG      = 16    // 每段每拍合并写入条数上限（8 APS + 4 OH 同段最坏 12，留余量）
 ) (
   input  logic                                  clk,
   input  logic                                  rst_n,
@@ -81,6 +84,7 @@ module koa #(
   localparam int N_SBUF       = 5;
   localparam int PRI_Q_DEPTH  = SBUF_DEPTH / 8;   // 每个 pri 段深度（=320）
   localparam int PTR_W        = $clog2(PRI_Q_DEPTH);
+  localparam int WR_CNT_W     = $clog2(MAX_WR_SEG + 1);  // 段内写入条数计数位宽
   localparam int PKG_W        = 3 + CID_W + POS_W + KO_W;  // {stream, cid, pos, data}
 
   // ---- 5×SBUF × 8 段存储（每段独立 FIFO）----
@@ -88,73 +92,95 @@ module koa #(
   logic [PTR_W-1:0] sbuf_head [N_SBUF][8];
   logic [PTR_W-1:0] sbuf_tail [N_SBUF][8];
   logic [PTR_W:0]   sbuf_cnt  [N_SBUF][8];
-  logic             wr_any    [N_SBUF][8];  // 本拍各 (SBUF,pri) 段是否有写入被接受
 
-  // ---- 写入接受（组合）：每段每拍接受 1 条；同段多写时 APS 平面固定优先于 OH ----
-  // 段号 = 报文 pri（0..7，随路传入）；rdy = 对应平面本拍被接受
+  // ---- 写入接受（组合）：同段同拍可合并写多条（合并向量写）----
+  // 段号 = 报文 pri（0..7，随路传入）；rdy = 对应平面本拍被接受（空间不足时让位）
   logic [NUM_OH_PLANES-1:0]  oh_e_acc, oh_i_acc;
   logic [NUM_X2X_PLANES-1:0] aps_e_acc, aps_i_acc, alm_acc;
   logic u_e_acc, u_i_acc;
 
-  // 段内最小有效平面（同流同 pri 内编号小优先；pri 为 8 平面×3bit 打包）
-  function automatic logic plane_first(logic [7:0] vld, int i, logic [23:0] pri, int g);
-    for (int k = 0; k < i; k++)
-      if (vld[k] && pri[k*3 +: 3] == g) return 1'b0;
-    return 1'b1;
-  endfunction
+  // 本拍各段待写列表：wr_pkg[s][g][0 .. wr_cnt-1]，写入顺序即"DUT 出队前的段内顺序"
+  logic [PKG_W-1:0]   wr_pkg [N_SBUF][8][MAX_WR_SEG];
+  logic [WR_CNT_W-1:0] wr_cnt [N_SBUF][8];
 
   always_comb begin
-    // APS 先算：同段内 APS 固定靠前（优先于 OH）
+    // 段内已排入条数累加器（块内 automatic，避免组合环）
+    automatic logic [WR_CNT_W-1:0] n_acc [N_SBUF][8];
+    automatic logic [PKG_W-1:0]    tmp   [N_SBUF][8][MAX_WR_SEG];
+    for (int s = 0; s < N_SBUF; s++)
+      for (int g = 0; g < 8; g++) n_acc[s][g] = '0;
+
+    // APS 类固定靠前：APS_EXT / APS_INS / ALM（同段同 pri 多平面全部可写，编小优先顺序）
     for (int i = 0; i < NUM_X2X_PLANES; i++) begin
       automatic logic [2:0] g = aps_e_pri[i*3 +: 3];
-      aps_e_acc[i] = aps_e_vld[i] && plane_first(aps_e_vld, i, aps_e_pri, g)
-                     && (sbuf_cnt[0][g] < PRI_Q_DEPTH);
+      aps_e_acc[i] = 1'b0;
+      if (aps_e_vld[i] && (sbuf_cnt[0][g] + n_acc[0][g] < PRI_Q_DEPTH)) begin
+        tmp[0][g][n_acc[0][g]] = {3'd2, aps_e_cid[i*CID_W +: CID_W],
+                                  aps_e_pos[i*POS_W +: POS_W],
+                                  aps_e_data[i*KO_W +: KO_W]};
+        n_acc[0][g] = n_acc[0][g] + 1'b1;
+        aps_e_acc[i] = 1'b1;
+      end
       g = aps_i_pri[i*3 +: 3];
-      aps_i_acc[i] = aps_i_vld[i] && plane_first(aps_i_vld, i, aps_i_pri, g)
-                     && (sbuf_cnt[1][g] < PRI_Q_DEPTH);
+      aps_i_acc[i] = 1'b0;
+      if (aps_i_vld[i] && (sbuf_cnt[1][g] + n_acc[1][g] < PRI_Q_DEPTH)) begin
+        tmp[1][g][n_acc[1][g]] = {3'd3, aps_i_cid[i*CID_W +: CID_W],
+                                  aps_i_pos[i*POS_W +: POS_W],
+                                  aps_i_data[i*KO_W +: KO_W]};
+        n_acc[1][g] = n_acc[1][g] + 1'b1;
+        aps_i_acc[i] = 1'b1;
+      end
       g = alm_pri[i*3 +: 3];
-      alm_acc[i]   = alm_vld[i]   && plane_first(alm_vld, i, alm_pri, g)
-                     && (sbuf_cnt[2][g] < PRI_Q_DEPTH);
+      alm_acc[i] = 1'b0;
+      if (alm_vld[i] && (sbuf_cnt[2][g] + n_acc[2][g] < PRI_Q_DEPTH)) begin
+        tmp[2][g][n_acc[2][g]] = {3'd4, alm_cid[i*CID_W +: CID_W],
+                                  alm_pos[i*POS_W +: POS_W],
+                                  alm_data[i*KO_W +: KO_W]};
+        n_acc[2][g] = n_acc[2][g] + 1'b1;
+        alm_acc[i] = 1'b1;
+      end
     end
-    // OH：同段已有 APS 被接受时让位（APS 固定靠前）
+    // OH 类排在 APS 之后：OH_EXT / OH_INS（同段同 pri 多平面全部可写，编小优先顺序）
     for (int i = 0; i < NUM_OH_PLANES; i++) begin
       automatic logic [2:0] g = oh_e_pri[i*3 +: 3];
-      automatic logic aps_win;
-      aps_win = 1'b0;
-      for (int k = 0; k < NUM_X2X_PLANES; k++)
-        if (aps_e_acc[k] && (aps_e_pri[k*3 +: 3] == g)) aps_win = 1'b1;
-      oh_e_acc[i] = oh_e_vld[i] && plane_first(oh_e_vld, i, oh_e_pri, g) &&
-                    !aps_win && (sbuf_cnt[0][g] < PRI_Q_DEPTH);
+      oh_e_acc[i] = 1'b0;
+      if (oh_e_vld[i] && (sbuf_cnt[0][g] + n_acc[0][g] < PRI_Q_DEPTH)) begin
+        tmp[0][g][n_acc[0][g]] = {3'd0, oh_e_cid[i*CID_W +: CID_W],
+                                  oh_e_pos[i*POS_W +: POS_W],
+                                  oh_e_data[i*KO_W +: KO_W]};
+        n_acc[0][g] = n_acc[0][g] + 1'b1;
+        oh_e_acc[i] = 1'b1;
+      end
+      g = oh_i_pri[i*3 +: 3];
+      oh_i_acc[i] = 1'b0;
+      if (oh_i_vld[i] && (sbuf_cnt[1][g] + n_acc[1][g] < PRI_Q_DEPTH)) begin
+        tmp[1][g][n_acc[1][g]] = {3'd1, oh_i_cid[i*CID_W +: CID_W],
+                                  oh_i_pos[i*POS_W +: POS_W],
+                                  oh_i_data[i*KO_W +: KO_W]};
+        n_acc[1][g] = n_acc[1][g] + 1'b1;
+        oh_i_acc[i] = 1'b1;
+      end
     end
-    for (int i = 0; i < NUM_OH_PLANES; i++) begin
-      automatic logic [2:0] g = oh_i_pri[i*3 +: 3];
-      automatic logic aps_win;
-      aps_win = 1'b0;
-      for (int k = 0; k < NUM_X2X_PLANES; k++)
-        if (aps_i_acc[k] && (aps_i_pri[k*3 +: 3] == g)) aps_win = 1'b1;
-      oh_i_acc[i] = oh_i_vld[i] && plane_first(oh_i_vld, i, oh_i_pri, g) &&
-                    !aps_win && (sbuf_cnt[1][g] < PRI_Q_DEPTH);
-    end
-    // UART_EXT → SBUF(3)，段=u_e_pri；UART_INS → SBUF(4)，段=u_i_pri
+    // UART（每段最多 1 条）
     u_e_acc = u_e_vld && (sbuf_cnt[3][u_e_pri] < PRI_Q_DEPTH);
     u_i_acc = u_i_vld && (sbuf_cnt[4][u_i_pri] < PRI_Q_DEPTH);
-
-    // wr_any：各 (SBUF,pri) 段本拍接受的写入（acc 已保证同段最多 1 条）
+    if (u_e_acc) begin
+      tmp[3][u_e_pri][0] = {3'd5, '0, 3'd0, u_e_data};
+      n_acc[3][u_e_pri] = 1'b1;
+    end
+    if (u_i_acc) begin
+      tmp[4][u_i_pri][0] = {3'd6, '0, 3'd0, u_i_data};
+      n_acc[4][u_i_pri] = 1'b1;
+    end
+    // 拷贝到模块信号
     for (int s = 0; s < N_SBUF; s++)
-      for (int g = 0; g < 8; g++) wr_any[s][g] = 1'b0;
-    for (int i = 0; i < NUM_OH_PLANES; i++) begin
-      wr_any[0][oh_e_pri[i*3 +: 3]] |= oh_e_acc[i];
-      wr_any[1][oh_i_pri[i*3 +: 3]] |= oh_i_acc[i];
-    end
-    for (int i = 0; i < NUM_X2X_PLANES; i++) begin
-      wr_any[0][aps_e_pri[i*3 +: 3]] |= aps_e_acc[i];
-      wr_any[1][aps_i_pri[i*3 +: 3]] |= aps_i_acc[i];
-      wr_any[2][alm_pri[i*3 +: 3]]   |= alm_acc[i];
-    end
-    wr_any[3][u_e_pri] = u_e_acc;
-    wr_any[4][u_i_pri] = u_i_acc;
+      for (int g = 0; g < 8; g++) begin
+        wr_cnt[s][g] = n_acc[s][g];
+        for (int n = 0; n < MAX_WR_SEG; n++)
+          wr_pkg[s][g][n] = tmp[s][g][n];
+      end
   end
-  // rdy = 本拍接受（组合，随 vld/段未满变化）
+  // rdy = 本拍接受（组合，随 vld/段剩余空间变化）
   assign oh_e_rdy  = oh_e_acc;
   assign oh_i_rdy  = oh_i_acc;
   assign aps_e_rdy = aps_e_acc;
@@ -189,7 +215,7 @@ module koa #(
         end
   end
 
-  // ---- 主时序：写入（直写 SBUF 段）+ SP/RR 出队 + 输出寄存（一拍）----
+  // ---- 主时序：合并向量写（按段）+ SP/RR 出队 + 输出寄存（一拍）----
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       for (int s = 0; s < N_SBUF; s++)
@@ -207,64 +233,22 @@ module koa #(
       out_cid  <= '0;
       out_pos  <= '0;
     end else begin
-      // ---- 写入：各流按接受（acc）直写对应 SBUF 段（mem + tail）----
-      // OH_EXT → EXT_SBUF(0)，段=oh_e_pri[i]
-      for (int i = 0; i < NUM_OH_PLANES; i++)
-        if (oh_e_acc[i]) begin
-          automatic logic [2:0] g = oh_e_pri[i*3 +: 3];
-          sbuf_mem[0][g][sbuf_tail[0][g]] <= {3'd0, oh_e_cid[i*CID_W +: CID_W],
-                                              oh_e_pos[i*POS_W +: POS_W],
-                                              oh_e_data[i*KO_W +: KO_W]};
-          sbuf_tail[0][g] <= (sbuf_tail[0][g] == PRI_Q_DEPTH-1) ? '0 : sbuf_tail[0][g] + 1'b1;
-        end
-      // OH_INS → INS_SBUF(1)，段=oh_i_pri[i]
-      for (int i = 0; i < NUM_OH_PLANES; i++)
-        if (oh_i_acc[i]) begin
-          automatic logic [2:0] g = oh_i_pri[i*3 +: 3];
-          sbuf_mem[1][g][sbuf_tail[1][g]] <= {3'd1, oh_i_cid[i*CID_W +: CID_W],
-                                              oh_i_pos[i*POS_W +: POS_W],
-                                              oh_i_data[i*KO_W +: KO_W]};
-          sbuf_tail[1][g] <= (sbuf_tail[1][g] == PRI_Q_DEPTH-1) ? '0 : sbuf_tail[1][g] + 1'b1;
-        end
-      // APS_EXT → EXT_SBUF(0)，段=aps_e_pri[i]
-      for (int i = 0; i < NUM_X2X_PLANES; i++)
-        if (aps_e_acc[i]) begin
-          automatic logic [2:0] g = aps_e_pri[i*3 +: 3];
-          sbuf_mem[0][g][sbuf_tail[0][g]] <= {3'd2, aps_e_cid[i*CID_W +: CID_W],
-                                              aps_e_pos[i*POS_W +: POS_W],
-                                              aps_e_data[i*KO_W +: KO_W]};
-          sbuf_tail[0][g] <= (sbuf_tail[0][g] == PRI_Q_DEPTH-1) ? '0 : sbuf_tail[0][g] + 1'b1;
-        end
-      // APS_INS → INS_SBUF(1)，段=aps_i_pri[i]
-      for (int i = 0; i < NUM_X2X_PLANES; i++)
-        if (aps_i_acc[i]) begin
-          automatic logic [2:0] g = aps_i_pri[i*3 +: 3];
-          sbuf_mem[1][g][sbuf_tail[1][g]] <= {3'd3, aps_i_cid[i*CID_W +: CID_W],
-                                              aps_i_pos[i*POS_W +: POS_W],
-                                              aps_i_data[i*KO_W +: KO_W]};
-          sbuf_tail[1][g] <= (sbuf_tail[1][g] == PRI_Q_DEPTH-1) ? '0 : sbuf_tail[1][g] + 1'b1;
-        end
-      // ALM → ALM_SBUF(2)，段=alm_pri[i]
-      for (int i = 0; i < NUM_X2X_PLANES; i++)
-        if (alm_acc[i]) begin
-          automatic logic [2:0] g = alm_pri[i*3 +: 3];
-          sbuf_mem[2][g][sbuf_tail[2][g]] <= {3'd4, alm_cid[i*CID_W +: CID_W],
-                                              alm_pos[i*POS_W +: POS_W],
-                                              alm_data[i*KO_W +: KO_W]};
-          sbuf_tail[2][g] <= (sbuf_tail[2][g] == PRI_Q_DEPTH-1) ? '0 : sbuf_tail[2][g] + 1'b1;
-        end
-      // UART_EXT → SBUF(3)，段=u_e_pri
-      if (u_e_acc) begin
-        sbuf_mem[3][u_e_pri][sbuf_tail[3][u_e_pri]] <= {3'd5, '0, 3'd0, u_e_data};
-        sbuf_tail[3][u_e_pri] <= (sbuf_tail[3][u_e_pri] == PRI_Q_DEPTH-1) ? '0 : sbuf_tail[3][u_e_pri] + 1'b1;
-      end
-      // UART_INS → SBUF(4)，段=u_i_pri
-      if (u_i_acc) begin
-        sbuf_mem[4][u_i_pri][sbuf_tail[4][u_i_pri]] <= {3'd6, '0, 3'd0, u_i_data};
-        sbuf_tail[4][u_i_pri] <= (sbuf_tail[4][u_i_pri] == PRI_Q_DEPTH-1) ? '0 : sbuf_tail[4][u_i_pri] + 1'b1;
-      end
+      // ---- 写入：按段合并写 wr_cnt 条（地址 tail+n，tail 按条数推进）----
+      for (int s = 0; s < N_SBUF; s++)
+        for (int g = 0; g < 8; g++)
+          if (wr_cnt[s][g] != 0) begin
+            automatic logic [PTR_W:0] tail_n = sbuf_tail[s][g] + wr_cnt[s][g];
+            for (int n = 0; n < MAX_WR_SEG; n++)
+              if (n < wr_cnt[s][g]) begin
+                automatic logic [PTR_W:0] wa_n = sbuf_tail[s][g] + n[PTR_W-1:0];
+                sbuf_mem[s][g][(wa_n >= PRI_Q_DEPTH) ? wa_n - PRI_Q_DEPTH
+                                                     : wa_n[PTR_W-1:0]] <= wr_pkg[s][g][n];
+              end
+            sbuf_tail[s][g] <= (tail_n >= PRI_Q_DEPTH) ? tail_n - PRI_Q_DEPTH
+                                                       : tail_n[PTR_W-1:0];
+          end
 
-      // ---- 读：SP/RR 选中段出队（head + out 拆包）----
+      // ---- 读：SP/RR 选中段出队（head + out 拆包，用沿前状态）----
       if (rd_valid) begin
         sbuf_head[sel_sbuf][sel_grp] <= (sbuf_head[sel_sbuf][sel_grp] == PRI_Q_DEPTH-1)
                                         ? '0 : sbuf_head[sel_sbuf][sel_grp] + 1'b1;
@@ -279,11 +263,10 @@ module koa #(
         out_vld <= 1'b0;
       end
 
-      // ---- cnt 合并更新：写 +1 / 读 -1（同段同拍写读净 0，避免双 NBA 覆盖漂移）----
+      // ---- cnt 合并更新：写 +wr_cnt / 读 -1（同段同拍写读按条数净算）----
       for (int s = 0; s < N_SBUF; s++)
         for (int g = 0; g < 8; g++)
-          sbuf_cnt[s][g] <= sbuf_cnt[s][g]
-                            + (wr_any[s][g] ? 1'b1 : 1'b0)
+          sbuf_cnt[s][g] <= sbuf_cnt[s][g] + wr_cnt[s][g]
                             - ((rd_valid && (sel_sbuf == s) && (sel_grp == g)) ? 1'b1 : 1'b0);
 
       // rr 指针每拍推进（同优先级 5 路轮询）

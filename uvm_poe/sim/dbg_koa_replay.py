@@ -160,7 +160,7 @@ def main():
                               "read select mismatch model=(s%d,g%d) dut=(s%d,g%d) rr=%d" %
                               (s, g, dut_sel_s, dut_sel_g, rr))
 
-        # ---- 写入接受：先算 APS，再算 OH（APS 固定靠前）----
+        # ---- 写入接受（与 KOA 合并向量写一致）：APS 类固定靠前，OH 类后写 ----
         acc = {}          # stream name -> list of bool per plane
         pris = {}         # stream name -> list of pri per plane
         for st in STREAMS:
@@ -170,48 +170,52 @@ def main():
             pris[nm] = []
             for p in range(npl):
                 pris[nm].append(get("dut", nm + "_pri") and slicev(get("dut", nm + "_pri"), p*3+2, p*3))
+        n_acc = [[0] * N_PRI for _ in range(N_SBUF)]   # 段内本拍已排入条数
 
         def vld_of(nm, p):
             if STREAMS[[s["name"] for s in STREAMS].index(nm)]["planes"] == 1:
                 return get("dut", nm + "_vld")
             return slicev(get("dut", nm + "_vld"), p, p)
 
-        def plane_first(vlds, i, pri_list, g):
-            for k in range(i):
-                if vlds[k] and pri_list[k] == g:
-                    return False
-            return True
+        def data_of(nm, p, st):
+            if st["planes"] > 1:
+                return slicev(get("dut", nm + "_data"), p*384+383, p*384)
+            return get("dut", nm + "_data")
 
-        # APS / ALM（无条件让位给同段 OH 的规则不适用于 APS；APS 直接仲裁同流）
+        def cidpos_of(nm, p, st):
+            if st["kind"] == "uart":
+                return (0, 0)
+            return (slicev(get("dut", nm + "_cid"), p*17+16, p*17),
+                    slicev(get("dut", nm + "_pos"), p*3+2, p*3))
+
+        def try_wr(nm, p, sbuf):
+            """按 DUT 顺序尝试入队：vld 有效且段剩余空间足够才接受。"""
+            st = STREAMS[[s["name"] for s in STREAMS].index(nm)]
+            if not vld_of(nm, p):
+                return
+            g = pris[nm][p]
+            if model.cnt[sbuf][g] + n_acc[sbuf][g] >= DEPTH:
+                return
+            acc[nm][p] = True
+            n_acc[sbuf][g] += 1
+            cid, pos = cidpos_of(nm, p, st)
+            model.push(sbuf, g, (st["sid"], cid, pos, data_of(nm, p, st)))
+            trace.append("t=%dps WRITE %s[%d] -> (s%d,g%d)" % (T, nm, p, sbuf, g))
+
+        # APS 类固定靠前（编小优先）
         for nm in ("aps_e", "aps_i", "alm"):
             st = STREAMS[[s["name"] for s in STREAMS].index(nm)]
-            sbuf = st["sbuf"]
-            vlds = [vld_of(nm, p) for p in range(st["planes"])]
             for p in range(st["planes"]):
-                g = pris[nm][p]
-                if vlds[p] and plane_first(vlds, p, pris[nm], g) and model.cnt[sbuf][g] < DEPTH:
-                    acc[nm][p] = True
-        # OH：同段已有 APS 接受时让位
+                try_wr(nm, p, st["sbuf"])
+        # OH 类排在 APS 之后（编小优先）
         for nm in ("oh_e", "oh_i"):
             st = STREAMS[[s["name"] for s in STREAMS].index(nm)]
-            sbuf = st["sbuf"]
-            aps_nm = "aps_e" if nm == "oh_e" else "aps_i"
-            aps_st = STREAMS[[s["name"] for s in STREAMS].index(aps_nm)]
-            vlds = [vld_of(nm, p) for p in range(st["planes"])]
             for p in range(st["planes"]):
-                g = pris[nm][p]
-                aps_win = False
-                for k in range(aps_st["planes"]):
-                    if acc[aps_nm][k] and pris[aps_nm][k] == g:
-                        aps_win = True
-                if vlds[p] and plane_first(vlds, p, pris[nm], g) and not aps_win \
-                        and model.cnt[sbuf][g] < DEPTH:
-                    acc[nm][p] = True
+                try_wr(nm, p, st["sbuf"])
         # UART
         for nm in ("u_e", "u_i"):
             st = STREAMS[[s["name"] for s in STREAMS].index(nm)]
-            if vld_of(nm, 0) and model.cnt[st["sbuf"]][pris[nm][0]] < DEPTH:
-                acc[nm][0] = True
+            try_wr(nm, 0, st["sbuf"])
 
         # 与 DUT rdy 比对（写侧）
         for st in STREAMS:
@@ -222,24 +226,6 @@ def main():
                 if rdy_bit != (1 if acc[nm][p] else 0):
                     report_rdy_mm(T, "%s[%d] model_acc=%d dut_rdy=%d pri=%d" %
                                   (nm, p, 1 if acc[nm][p] else 0, rdy_bit, pris[nm][p]))
-
-        # 入队（与 DUT 相同的打包顺序）
-        for st in STREAMS:
-            nm = st["name"]
-            sbuf = st["sbuf"]
-            for p in range(st["planes"]):
-                if acc[nm][p]:
-                    g = pris[nm][p]
-                    data = get("dut", nm + "_data")
-                    if st["planes"] > 1:
-                        data = slicev(get("dut", nm + "_data"), p*384+383, p*384)
-                    cid = 0
-                    pos = 0
-                    if st["kind"] != "uart":
-                        cid = slicev(get("dut", nm + "_cid"), p*17+16, p*17)
-                        pos = slicev(get("dut", nm + "_pos"), p*3+2, p*3)
-                    model.push(sbuf, g, (st["sid"], cid, pos, data))
-                    trace.append("t=%dps WRITE %s[%d] -> (s%d,g%d)" % (T, nm, p, sbuf, g))
 
         # ---- 应用：先入队（写），再出队（读），同段写读净 0 ----
         if sel is not None:

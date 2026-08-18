@@ -53,6 +53,15 @@ class koa_scoreboard extends uvm_scoreboard;
     endcase
   endfunction
 
+  // 段内写入顺序（与 KOA 合并向量写一致）：APS 类固定靠前，OH 类后写；
+  // 同类内保持 monitor 采样顺序（即平面编号小优先）
+  function int wr_order(koa_stream_t s);
+    case (s) inside
+      ST_OH_EXT, ST_OH_INS: return 1;
+      default:              return 0;
+    endcase
+  endfunction
+
   function void check_phase(uvm_phase phase);
     string fnames[7];
     longint cur_t;
@@ -74,23 +83,39 @@ class koa_scoreboard extends uvm_scoreboard;
     // rr 从复位起每拍推进，故初始化为第一个事件时刻的拍数模 5（与 KOA 对齐）
     cur_t = (all_ev.size() > 0) ? longint'(all_ev[0].ev_time) : -1;
     rr_ptr = (all_ev.size() > 0) ? int'(all_ev[0].ev_time % N_SBUF) : 0;
-    foreach (all_ev[i]) begin
+    for (int i = 0; i < all_ev.size();) begin
       if (all_ev[i].ev_time != cur_t) begin
         if (cur_t != -1) rr_ptr = (rr_ptr + (all_ev[i].ev_time - cur_t)) % N_SBUF;
         cur_t = all_ev[i].ev_time;
       end
       if (!all_ev[i].is_out) begin
-        int s = stream_sbuf(all_ev[i].stream);
-        int g = all_ev[i].pri;
-        if (q_cnt[s][g] == MAXQ) begin
-          `uvm_error("SCB", $sformatf("SBUF%0d 优先级段 %0d 满（输入超限）", s, g))
-          n_mismatch++;
-        end else begin
-          q_items[s][g][q_tail[s][g]] = all_ev[i];
-          q_tail[s][g] = (q_tail[s][g] == MAXQ-1) ? 0 : q_tail[s][g] + 1;
-          q_cnt[s][g] = q_cnt[s][g] + 1;
-          if (q_cnt[s][g] > peak_q_occ) peak_q_occ = q_cnt[s][g];
+        // 收集同一 ev_time 的全部 IN（排序后连续），按 KOA 写入顺序重排后入队：
+        // 同段同拍多条时 DUT 按 APS 类先、OH 类后合并写入，FIFO 内顺序必须一致
+        int n = 0;
+        while (i + n < all_ev.size() && !all_ev[i+n].is_out && all_ev[i+n].ev_time == cur_t) n++;
+        for (int a = 1; a < n; a++) begin
+          koa_item key = all_ev[i+a];
+          int j = a - 1;
+          while (j >= 0 && wr_order(all_ev[i+j].stream) > wr_order(key.stream)) begin
+            all_ev[i+j+1] = all_ev[i+j];
+            j--;
+          end
+          all_ev[i+j+1] = key;
         end
+        for (int a = 0; a < n; a++) begin
+          int s = stream_sbuf(all_ev[i+a].stream);
+          int g = all_ev[i+a].pri;
+          if (q_cnt[s][g] == MAXQ) begin
+            `uvm_error("SCB", $sformatf("SBUF%0d 优先级段 %0d 满（输入超限）", s, g))
+            n_mismatch++;
+          end else begin
+            q_items[s][g][q_tail[s][g]] = all_ev[i+a];
+            q_tail[s][g] = (q_tail[s][g] == MAXQ-1) ? 0 : q_tail[s][g] + 1;
+            q_cnt[s][g] = q_cnt[s][g] + 1;
+            if (q_cnt[s][g] > peak_q_occ) peak_q_occ = q_cnt[s][g];
+          end
+        end
+        i += n;
       end else begin
         // SP：最高非空 pri 组（任一 SBUF 的该段非空）
         int g = -1;
@@ -124,6 +149,7 @@ class koa_scoreboard extends uvm_scoreboard;
                       (all_ev[i].ko_data !== q_items[s_sel][g][q_head[s_sel][g]].ko_data);
         q_head[s_sel][g] = (q_head[s_sel][g] == MAXQ-1) ? 0 : q_head[s_sel][g] + 1;
         q_cnt[s_sel][g] = q_cnt[s_sel][g] - 1;
+        i++;
       end
     end
     if (in_cnt != out_cnt)
