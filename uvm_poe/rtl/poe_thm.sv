@@ -15,8 +15,9 @@
 // ============================================================================
 module poe_thm #(
     parameter int MAX_THREADS = 64,
-    parameter int MAX_TS = 4,
+    parameter int MAX_TS = 16,
     parameter int MAX_BURST = 4,
+    parameter int TS_ID_W = 6, // ts 编号位宽（0..63，容纳跳转）
     parameter int CID_W = 17,
     parameter int BUF_DEPTH = 8
     ) (
@@ -28,11 +29,14 @@ module poe_thm #(
     input logic [2:0] ko_stream, // 来源流 0..6
     input logic [CID_W-1:0] ko_cid,
     input logic [2:0] ko_pos,
-    input logic ko_pre_read, // KO 带 pre_read：直接插队注入 c_task burst
-    input logic [2:0] th_ts_cnt, // 线程 ts 数（1..4）
-    input logic [2:0] th_bs_cnt, // 每 ts burst 数（1..4，= ts_len）
+    input logic [3:0] ko_pre_vld, // 预读入口指示（4 组，随 KO 报文）
+    input logic [79:0] ko_dma_addr, // 预读入口 smc 地址（4×20bit）
+    input logic [3:0] ko_pre_op, // 预读入口操作类型（4×1bit）
+    input logic [$clog2(MAX_TS+1)-1:0] th_ts_cnt, // 线程 ts 数（1..MAX_TS）
+    input logic [MAX_TS*3-1:0] th_bs_cnt, // 每 ts burst 数（4×3bit，各 ts 独立；ts0 固定 1）
+    input logic [MAX_TS*TS_ID_W-1:0] th_ts_id, // 每 ts 编号（递增可跳转，模拟 ts 跳转）
     input logic [2:0] th_pri, // 线程 burst 优先级（0 最高，调度依据）
-    input logic [MAX_BURST*32-1:0] th_burst_seq, // 每 ts 的 burst 模式（4×32bit，各 ts 复用）
+    input logic [MAX_TS*MAX_BURST*32-1:0] th_burst_seq, // 每 ts 独立 burst 模式（4ts×4×32bit）
     input logic [7:0] th_vtsk_c_seq, // CSR vtsk_c：i/v 任务执行掩码（tsk_id 查询）
     input logic [7:0] th_dma_c_seq, // CSR dma_c：c_task 执行指示（8bit 掩码，对应 cw 8 项）
     input logic [383:0] th_cw_seq, // CSR cw：c_task 操作表（8×6B，条目 48bit）
@@ -40,30 +44,37 @@ module poe_thm #(
     // ---- th_sch：ready_mask / 发射 burst 的 ts / cur_ts / burst ----
     output logic [MAX_THREADS-1:0] ready_mask, // READY 且未到头线程位图
     output logic [MAX_THREADS*3-1:0] ready_pri, // 每线程 burst 优先级
-    output logic [MAX_THREADS*2-1:0] ready_burst_ts, // 发射 burst 所属 ts（由 bs_pc 推导）
-    output logic [MAX_THREADS*2-1:0] ready_curts, // 当前 ts（cu_done/dma_done 推进）
+    output logic [MAX_THREADS*TS_ID_W-1:0] ready_burst_ts, // 发射 burst 所属 ts 编号（由 bs_pc 推导）
+    output logic [MAX_THREADS*TS_ID_W-1:0] ready_curts, // 当前 ts 编号（cu_done/dma_done 推进）
     output logic [MAX_THREADS*32-1:0] ready_burst, // 发射 burst（bs_pc 索引，32bit）
     input logic iss_vld0,
     input logic [5:0] iss_tid0,
     input logic iss_vld1,
     input logic [5:0] iss_tid1,
-    // ---- CU / dma_ctrl 完成：cur_ts 推进依赖完成统计 ----
-    input logic cu_done_vld,
-    input logic [5:0] cu_done_tid,
+    // ---- CU（2 单元）/ dma_ctrl 完成：cur_ts 推进依赖完成统计 ----
+    input logic cu_done_vld0,
+    input logic [5:0] cu_done_tid0,
+    input logic cu_done_vld1,
+    input logic [5:0] cu_done_tid1,
     input logic dma_done_vld,
     input logic [5:0] dma_done_tid,
     // ---- burst_sch 二级发射通知（打拍起点，占位） ----
     input logic emit_vld,
     input logic [5:0] emit_tid,
-    // ---- pre_read 插队注入（直接送 c_task burst 到 burst 队列） ----
-    input logic pre_inj_rdy,
-    output logic pre_inj_vld,
-    output logic [5:0] pre_inj_tid,
-    output logic [1:0] pre_inj_ts,
-    output logic [31:0] pre_inj_burst,
+    // ---- pre_read 预读转发（线程创建同拍 → burst_sch，4 组） ----
+    input logic pre_buf_rdy, // 二级发射预读缓存有空间（满反压带预读 KO 建线程）
+    output logic [3:0] pre_vld,
+    output logic [23:0] pre_tid, // 4×6bit（= 新建线程 tid）
+    output logic [79:0] pre_dma_addr,
+    output logic [3:0] pre_op,
     // ---- CSR 暴露（c_task 按 dma_id 查询）：dma_c → burst_sch/dma_ctrl；cw → dma_ctrl ----
     output logic [MAX_THREADS*8-1:0] csr_dma_c,
     output logic [MAX_THREADS*384-1:0] csr_cw,
+    // ---- CSR.cw 条目更新（dma_ctrl loc/free 回写） ----
+    input logic cw_upd_vld,
+    input logic [5:0] cw_upd_tid,
+    input logic [2:0] cw_upd_ind,
+    input logic [47:0] cw_upd_data,
     output logic [7:0] pre_dma_c,
     output logic [255:0] pre_cw,
     // ---- 线程释放通知（→ dma_ctrl 归还该线程 C 窗资源） ----
@@ -79,36 +90,49 @@ module poe_thm #(
 
     state_t th_state [MAX_THREADS];
     logic [31:0] th_head [MAX_THREADS];
-    logic [2:0] th_ts_n [MAX_THREADS];
+    logic [TS_W-1:0] th_ts_n [MAX_THREADS];
     logic [2:0] th_pri_r [MAX_THREADS];
-    logic [31:0] th_burst_r [MAX_THREADS][MAX_BURST]; // 每 ts 的 burst 模式（各 ts 复用）
+    logic [31:0] th_burst_r [MAX_THREADS][MAX_TS][MAX_BURST]; // 每 ts 独立 burst 模式
     logic [2:0] th_stream [MAX_THREADS];
     logic [CID_W-1:0] th_cid [MAX_THREADS];
     logic [2:0] th_pos [MAX_THREADS];
-    logic [4:0] th_bs_pc [MAX_THREADS]; // 应执行 burst 全局流水序号（打拍推进，跨 ts）
-    logic [1:0] th_cur_ts [MAX_THREADS]; // 当前 ts（完成统计推进）
+    logic [6:0] th_bs_pc [MAX_THREADS]; // 应执行 burst 全局流水序号（跨 ts，最大 16×4=64）
+    logic [TS_ID_W-1:0] th_cur_ts [MAX_THREADS]; // 当前 ts 编号（done 统计推进，按 ts_id 跳转）
+    logic [3:0] th_ts_idx [MAX_THREADS]; // 当前在第几个 ts（序号 0..n-1）
+    logic [TS_ID_W-1:0] th_ts_id_r [MAX_THREADS][MAX_TS]; // 每 ts 编号（递增可跳转）
     logic [7:0] th_wait [MAX_THREADS];
     logic [2:0] th_done [MAX_THREADS]; // 当前 ts 已完成 burst 数
-    logic [2:0] th_need [MAX_THREADS]; // 当前 ts 实际执行 burst 数（首个 branch 提前）
+    logic [2:0] th_need [MAX_THREADS][MAX_TS]; // 每 ts 实际执行 burst 数（branch 提前后）
+    logic [6:0] th_off [MAX_THREADS][MAX_TS+1]; // 每 ts 起始累计偏移（off[k]=前 k 个 ts 总长）
+    logic [3:0] th_sel_ts [MAX_THREADS]; // bs_pc 所属 ts 序号（组合推导）
+    logic [2:0] th_sel_idx [MAX_THREADS]; // bs_pc 在所属 ts 内的 burst 序号（组合推导）
     csr_t csr [MAX_THREADS];
     logic [47:0] sys_ts_cnt; // 系统时戳计数（1GHz 拍，48bit）
 
     // ---- 8 深报文缓存（保序等待） ----
     localparam int KO_W = 384;
     localparam int ST_W = 3;
-    localparam int TS_W = 3;
-    localparam int BS_W = 3;
+    localparam int TS_W = $clog2(MAX_TS + 1); // ts 数位宽（16 → 4bit）
+    localparam int TS_ID_VEC_W = MAX_TS * TS_ID_W; // 每 ts 编号向量
+    localparam int BS_W = MAX_TS * 3; // 每 ts burst 数向量（4×3bit）
     localparam int PR_W = 3;
-    localparam int BURST_PAT_W = MAX_BURST * BURST_W;
+    localparam int BURST_PAT_W = MAX_TS * MAX_BURST * BURST_W; // 4ts×4×32bit
     localparam int DMA_C_W = 8;
     localparam int CW_W = 384;
-    localparam int PKG_W = KO_W + ST_W + CID_W + 3 + TS_W + BS_W + PR_W
+    // 预读字段（随报文缓存）：{pre_vld(4), dma_addr(80), op(4)}
+    localparam int PRE_VEC_W = 88;
+    localparam int PKG_W = PRE_VEC_W + KO_W + ST_W + CID_W + 3 + TS_W + TS_ID_VEC_W + BS_W + PR_W
     + BURST_PAT_W + 8 + DMA_C_W + CW_W;
-    localparam int ST_MSB = PKG_W - 1 - KO_W;
+    localparam int PRE_VLD_MSB = PKG_W - 1;
+    localparam int PRE_ADDR_MSB = PKG_W - 5;
+    localparam int PRE_OP_MSB = PKG_W - 85;
+    localparam int KO_MSB = PKG_W - 89;
+    localparam int ST_MSB = KO_MSB - KO_W;
     localparam int CID_MSB = ST_MSB - ST_W;
     localparam int POS_MSB = CID_MSB - CID_W;
     localparam int TS_MSB = POS_MSB - 3;
-    localparam int BS_MSB = TS_MSB - TS_W;
+    localparam int TS_ID_MSB = TS_MSB - TS_W;
+    localparam int BS_MSB = TS_ID_MSB - TS_ID_VEC_W;
     localparam int PR_MSB = BS_MSB - BS_W;
     localparam int BP_MSB = PR_MSB - PR_W;
     localparam int VTSK_MSB = BP_MSB - BURST_PAT_W;
@@ -150,8 +174,10 @@ module poe_thm #(
     end
     assign buf_full = (buf_cnt == BUF_DEPTH);
     assign buf_empty = (buf_cnt == 0);
-    // pre_read KO 的反压取决于插队注入侧（burst 队列）是否有空间
-    assign ko_rdy = ko_pre_read ? pre_inj_rdy : can_accept;
+    // 反压：能建线程/入缓存 且 非缓存放行拍 且（带预读 KO 需预读缓存空间）。
+    // 缓存放行拍（buf_ok=1）本拍专用于缓存报文建线程，对 KOA 拉 1 拍反压，
+    // 让新报文 vld 保持、下一拍再处理；多个保序阻塞连续解除时连续反压多拍。
+    assign ko_rdy = can_accept && !buf_ok && (!(|ko_pre_vld) || pre_buf_rdy);
 
     // 新报文可接受：能建线程（有空槽且同 key 无活跃）或能入缓存（未满）
     always_comb begin
@@ -171,30 +197,32 @@ module poe_thm #(
         end
     end
 
-    // ---- pre_read 插队：KO 带 pre_read 且注入侧就绪时，直接送一条 c_task burst ----
-    // （不建线程、不查保序；dma_id 取 KO 报文低 6bit，pre_dma_c/pre_cw 为独立占位 CSR）
-    assign pre_inj_vld = ko_vld && ko_pre_read && pre_inj_rdy;
-    assign pre_inj_tid = 6'd0; // pre 无线程归属，靠队列项 pre 标志区分
-    assign pre_inj_ts = 2'd0;
-    assign pre_inj_burst = {1'b1, // st：视为 ts 首个
-    1'b0, // tr
-    4'd0, // rev
-    1'b1, // burst_type：c_task
-    1'b0, // vld_cu：1 个 task
-    ko_data[2:0], // dma_id0（占位）
-    1'b1, // c0：任务有效
-    ko_data[5:3], // dma_id1（占位）
-    1'b0, // c1：vld_cu=0 无效
-    8'd1, // occ_ts0
-    8'd1}; // occ_ts1
-    assign pre_dma_c = 8'hFF; // 占位：pre 任务全部可执行
-
-    // pre CSR cw：tag 取 KO 报文首字节（占位），其余为操作类型占位
+    // ---- pre_read 预读转发：线程创建成立的那一拍，把预读信息（含新建 tid）送给 burst_sch ----
+    logic thread_cre_ok;
+    logic [3:0] src_pre_vld; // 预读来源：缓存放行用缓存条目，否则用 KOA 输入
+    logic [79:0] src_pre_addr;
+    logic [3:0] src_pre_op;
     always_comb begin
-        pre_cw = '0;
-        for (int k = 0; k < 8; k++)
-            pre_cw[k*32 +: 8] = ko_data[7:0];
+        thread_cre_ok = (find_idle() >= 0) &&
+                        (buf_ok || (ko_vld && ko_rdy &&
+                         !key_active(ko_stream, ko_cid, ko_pos)));
+        if (buf_ok) begin
+            src_pre_vld = buf_mem[buf_head][PRE_VLD_MSB -: 4];
+            src_pre_addr = buf_mem[buf_head][PRE_ADDR_MSB -: 80];
+            src_pre_op = buf_mem[buf_head][PRE_OP_MSB -: 4];
+        end else begin
+            src_pre_vld = ko_pre_vld;
+            src_pre_addr = ko_dma_addr;
+            src_pre_op = ko_pre_op;
+        end
     end
+    assign pre_vld = thread_cre_ok ? src_pre_vld : 4'd0;
+    assign pre_tid = thread_cre_ok ? {4{find_idle()[5:0]}} : 24'd0;
+    assign pre_dma_addr = thread_cre_ok ? src_pre_addr : 80'd0;
+    assign pre_op = thread_cre_ok ? src_pre_op : 4'd0;
+
+    assign pre_dma_c = 8'd0; // 旧插队路径废弃（burst_sch q_pre 恒 0）
+    assign pre_cw = '0;
 
     // ---- CSR 暴露（burst_sch 按 tid+dma_id 查询） ----
     always_comb begin
@@ -216,16 +244,78 @@ module poe_thm #(
         end
     end
 
+    // ---- 完成事件聚合：cu0/cu1/dma 三路 done 按 tid 合并（同 tid 同拍累加） ----
+    logic [1:0] done_n; // 本拍 done 事件数（0..3）
+    logic [5:0] done_tid_l [3];
+    logic [1:0] done_cnt_l [3];
+    always_comb begin
+        done_n = 2'd0;
+        if (cu_done_vld0) begin
+            automatic int f = -1;
+            for (int k = 0; k < 3; k++)
+                if ((k < done_n) && (done_tid_l[k] == cu_done_tid0)) f = k;
+            if (f >= 0) done_cnt_l[f] = done_cnt_l[f] + 1'b1;
+            else begin
+                done_tid_l[done_n] = cu_done_tid0;
+                done_cnt_l[done_n] = 2'd1;
+                done_n = done_n + 1'b1;
+            end
+        end
+        if (cu_done_vld1) begin
+            automatic int f = -1;
+            for (int k = 0; k < 3; k++)
+                if ((k < done_n) && (done_tid_l[k] == cu_done_tid1)) f = k;
+            if (f >= 0) done_cnt_l[f] = done_cnt_l[f] + 1'b1;
+            else begin
+                done_tid_l[done_n] = cu_done_tid1;
+                done_cnt_l[done_n] = 2'd1;
+                done_n = done_n + 1'b1;
+            end
+        end
+        if (dma_done_vld && (dma_done_tid < MAX_THREADS)) begin
+            automatic int f = -1;
+            for (int k = 0; k < 3; k++)
+                if ((k < done_n) && (done_tid_l[k] == dma_done_tid)) f = k;
+            if (f >= 0) done_cnt_l[f] = done_cnt_l[f] + 1'b1;
+            else begin
+                done_tid_l[done_n] = dma_done_tid;
+                done_cnt_l[done_n] = 2'd1;
+                done_n = done_n + 1'b1;
+            end
+        end
+    end
+
+    // ---- 每 ts 起始累计偏移（off[k] = 前 k 个 ts 的 burst 总数）----
+    always_comb begin
+        for (int i = 0; i < MAX_THREADS; i++) begin
+            th_off[i][0] = 7'd0;
+            for (int k = 0; k < MAX_TS; k++)
+                th_off[i][k+1] = th_off[i][k] + th_need[i][k];
+        end
+    end
+
+    // ---- bs_pc → (所属 ts, 段内 burst 序号) 组合映射 ----
+    always_comb begin
+        for (int i = 0; i < MAX_THREADS; i++) begin
+            automatic logic [3:0] ts = 4'd0;
+            for (int k = 1; k < MAX_TS; k++)
+                if (th_bs_pc[i] >= th_off[i][k]) ts = k[3:0];
+            th_sel_ts[i] = ts;
+            th_sel_idx[i] = th_bs_pc[i] - th_off[i][ts];
+        end
+    end
+
     // ---- 可发射 / 调度辅助 ----
     always_comb begin
         for (int i = 0; i < MAX_THREADS; i++) begin
             // 可发射：READY 且总流水未到头（跨 ts 连续，队列允许超前 ts 的 burst）
             ready_mask[i] = (th_state[i] == T_READY) &&
-                (th_bs_pc[i] < ({2'b0, th_ts_n[i]} * {2'b0, th_need[i]}));
+                (th_bs_pc[i] < th_off[i][th_ts_n[i]]);
             ready_pri[i*3 +: 3] = th_pri_r[i];
-            ready_burst_ts[i*2 +: 2] = th_bs_pc[i] / th_need[i];
-            ready_curts[i*2 +: 2] = th_cur_ts[i];
-            ready_burst[i*32 +: 32] = th_burst_r[i][th_bs_pc[i] % th_need[i]];
+            ready_burst_ts[i*TS_ID_W +: TS_ID_W] = th_ts_id_r[i][th_sel_ts[i]]; // 输出 ts 编号
+            ready_curts[i*TS_ID_W +: TS_ID_W] = th_cur_ts[i];
+            ready_burst[i*32 +: 32] =
+                th_burst_r[i][th_sel_ts[i]][th_sel_idx[i]];
         end
     end
 
@@ -235,9 +325,11 @@ module poe_thm #(
         burst_iv_t b;
         branch_cnt = 0;
         for (int i = 0; i < MAX_THREADS; i++) begin
-            b = th_burst_r[i][th_bs_pc[i] % th_need[i]];
-            if (th_state[i] == T_READY && !b.burst_type && b.branch)
-                branch_cnt++;
+            if (th_state[i] == T_READY && th_bs_pc[i] < th_off[i][MAX_TS]) begin
+                b = th_burst_r[i][th_sel_ts[i]][th_sel_idx[i]];
+                if (!b.burst_type && b.branch)
+                    branch_cnt++;
+            end
         end
     end
 
@@ -248,15 +340,18 @@ module poe_thm #(
                 th_head[i] <= '0;
                 th_ts_n[i] <= '0;
                 th_pri_r[i] <= '0;
-                for (int k = 0; k < MAX_BURST; k++) th_burst_r[i][k] <= '0;
+                for (int k = 0; k < MAX_TS; k++)
+                    for (int m = 0; m < MAX_BURST; m++) th_burst_r[i][k][m] <= '0;
                 th_stream[i] <= '0;
                 th_cid[i] <= '0;
                 th_pos[i] <= '0;
                 th_bs_pc[i] <= '0;
                 th_cur_ts[i] <= '0;
+                th_ts_idx[i] <= '0;
+                for (int k = 0; k < MAX_TS; k++) th_ts_id_r[i][k] <= '0;
                 th_wait[i] <= '0;
                 th_done[i] <= '0;
-                th_need[i] <= '0;
+                for (int k = 0; k < MAX_TS; k++) th_need[i][k] <= '0;
                 csr[i] <= '0;
             end
             buf_head <= '0;
@@ -272,7 +367,9 @@ module poe_thm #(
                 automatic logic [2:0] st;
                 automatic logic [CID_W-1:0] c;
                 automatic logic [2:0] p;
-                automatic logic [2:0] ts, bs;
+                automatic logic [TS_W-1:0] ts;
+                automatic logic [MAX_TS*3-1:0] bs; // 每 ts burst 数向量
+                automatic logic [MAX_TS*TS_ID_W-1:0] tid_vec; // 每 ts 编号向量
                 automatic logic [2:0] pr;
                 automatic logic [BURST_PAT_W-1:0] bp;
                 automatic logic [7:0] vtsk, dc;
@@ -280,55 +377,62 @@ module poe_thm #(
                 logic from_buf;
                 from_buf = 1'b0;
                 s = -1;
-                d = '0; st = 0; c = '0; p = 0; ts = 0; bs = 0; pr = 0;
+                d = '0; st = 0; c = '0; p = 0; ts = 0; bs = 0; tid_vec = 0; pr = 0;
                 bp = '0; vtsk = 0; dc = 0; cw = '0;
                 if (buf_ok) begin
                     from_buf = 1'b1;
                     s = buf_head;
-                    d = buf_mem[buf_head][383:0];
+                    d = buf_mem[buf_head][KO_MSB -: KO_W];
                     st = buf_mem[buf_head][ST_MSB -: ST_W];
                     c = buf_mem[buf_head][CID_MSB -: CID_W];
                     p = buf_mem[buf_head][POS_MSB -: 3];
                     ts = buf_mem[buf_head][TS_MSB -: TS_W];
+                    tid_vec = buf_mem[buf_head][TS_ID_MSB -: TS_ID_VEC_W];
                     bs = buf_mem[buf_head][BS_MSB -: BS_W];
                     pr = buf_mem[buf_head][PR_MSB -: PR_W];
                     bp = buf_mem[buf_head][BP_MSB -: BURST_PAT_W];
                     vtsk = buf_mem[buf_head][VTSK_MSB -: 8];
                     dc = buf_mem[buf_head][DMA_C_MSB -: DMA_C_W];
                     cw = buf_mem[buf_head][CW_MSB -: CW_W];
-                end else if (ko_vld && !ko_pre_read && can_accept &&
+                end else if (ko_vld && ko_rdy &&
                     !key_active(ko_stream, ko_cid, ko_pos) && t >= 0) begin
                     from_buf = 1'b0;
                     d = ko_data; st = ko_stream; c = ko_cid; p = ko_pos;
-                    ts = th_ts_cnt; bs = th_bs_cnt; pr = th_pri;
+                    ts = th_ts_cnt; bs = th_bs_cnt; tid_vec = th_ts_id; pr = th_pri;
                     bp = th_burst_seq; vtsk = th_vtsk_c_seq; dc = th_dma_c_seq; cw = th_cw_seq;
                 end
-                if (t >= 0 && (from_buf || (ko_vld && !ko_pre_read && can_accept &&
+                if (t >= 0 && (from_buf || (ko_vld && ko_rdy &&
                 !key_active(ko_stream, ko_cid, ko_pos)))) begin
-                    automatic int need_l = bs; // 默认本 ts 全部 burst；首个 branch（仅 i/v）提前结束
-                    automatic burst_iv_t tmp_b;
-                    for (int k = 0; k < MAX_BURST; k++) begin
-                        tmp_b = bp[k*BURST_W +: BURST_W];
-                        if (!tmp_b.burst_type && tmp_b.branch && k < bs) begin
-                            need_l = k + 1; break;
-                        end
-                    end
                     th_state[t] <= T_READY;
                     th_head[t] <= ko_poe_head(d);
                     th_ts_n[t] <= ts;
                     th_pri_r[t] <= pr;
-                    for (int k = 0; k < MAX_BURST; k++) begin
-                        tmp_b = bp[k*BURST_W +: BURST_W];
-                        th_burst_r[t][k] <= tmp_b;
+                    for (int k = 0; k < MAX_TS; k++)
+                        th_ts_id_r[t][k] <= tid_vec[k*TS_ID_W +: TS_ID_W];
+                    // 每 ts 独立：实际条数 = bs[k]（首个 branch 提前结束）
+                    for (int k = 0; k < MAX_TS; k++) begin
+                        automatic int need_k = bs[k*3 +: 3];
+                        automatic burst_iv_t tmp_b;
+                        for (int m = 0; m < MAX_BURST; m++) begin
+                            tmp_b = bp[(k*MAX_BURST + m)*BURST_W +: BURST_W];
+                            if (!tmp_b.burst_type && tmp_b.branch && m < need_k) begin
+                                need_k = m + 1;
+                                break;
+                            end
+                        end
+                        th_need[t][k] <= need_k[2:0];
+                        for (int m = 0; m < MAX_BURST; m++)
+                            th_burst_r[t][k][m] <=
+                                bp[(k*MAX_BURST + m)*BURST_W +: BURST_W];
                     end
                     th_stream[t] <= st;
                     th_cid[t] <= c;
                     th_pos[t] <= p;
                     th_bs_pc[t] <= 5'd0;
-                    th_cur_ts[t] <= 2'd0;
+                    th_cur_ts[t] <= tid_vec[TS_ID_W-1:0]; // 首个 ts 编号（约定 0）
+                    th_ts_idx[t] <= 4'd0;
                     th_wait[t] <= 8'd0;
                     th_done[t] <= 2'd0;
-                    th_need[t] <= need_l[2:0];
                     // ---- CSR 表项：建线程时同步生成 ----
                     csr[t].err <= 8'd0;
                     csr[t].ccr <= 64'd0;
@@ -348,19 +452,20 @@ module poe_thm #(
                 end
             end
             // ---- 直接到达入缓存（同 key 活跃时） ----
-            if (ko_vld && !ko_pre_read && can_accept &&
+            if (ko_vld && ko_rdy &&
             key_active(ko_stream, ko_cid, ko_pos) && !buf_full) begin
-                buf_mem[buf_tail] <= {ko_data, ko_stream, ko_cid, ko_pos,
-                th_ts_cnt, th_bs_cnt, th_pri,
+                buf_mem[buf_tail] <= {ko_pre_vld, ko_dma_addr, ko_pre_op,
+                ko_data, ko_stream, ko_cid, ko_pos,
+                th_ts_cnt, th_ts_id, th_bs_cnt, th_pri,
                 th_burst_seq, th_vtsk_c_seq, th_dma_c_seq, th_cw_seq};
                 buf_tail <= (buf_tail == BUF_DEPTH-1) ? '0 : buf_tail + 1'b1;
                 buf_cnt <= buf_cnt + 1'b1;
             end
             // ---- th_sch 一级发射：进入 ISSUED 并打拍（非 branch 1 拍，branch 1+3+t 拍） ----
             if (iss_vld0 && th_state[iss_tid0] == T_READY &&
-            th_bs_pc[iss_tid0] < ({2'b0, th_ts_n[iss_tid0]} * {2'b0, th_need[iss_tid0]})) begin
+            th_bs_pc[iss_tid0] < th_off[iss_tid0][th_ts_n[iss_tid0]]) begin
                 burst_iv_t biv;
-                biv = th_burst_r[iss_tid0][th_bs_pc[iss_tid0] % th_need[iss_tid0]];
+                biv = th_burst_r[iss_tid0][th_sel_ts[iss_tid0]][th_sel_idx[iss_tid0]];
                 th_state[iss_tid0] <= T_ISSUED;
                 csr[iss_tid0].th_stat <= T_ISSUED;
                 if (!biv.burst_type && biv.branch)
@@ -369,9 +474,9 @@ module poe_thm #(
                     th_wait[iss_tid0] <= 8'd1; // 1 拍
             end
             if (iss_vld1 && th_state[iss_tid1] == T_READY &&
-            th_bs_pc[iss_tid1] < ({2'b0, th_ts_n[iss_tid1]} * {2'b0, th_need[iss_tid1]})) begin
+            th_bs_pc[iss_tid1] < th_off[iss_tid1][th_ts_n[iss_tid1]]) begin
                 burst_iv_t biv;
-                biv = th_burst_r[iss_tid1][th_bs_pc[iss_tid1] % th_need[iss_tid1]];
+                biv = th_burst_r[iss_tid1][th_sel_ts[iss_tid1]][th_sel_idx[iss_tid1]];
                 th_state[iss_tid1] <= T_ISSUED;
                 csr[iss_tid1].th_stat <= T_ISSUED;
                 if (!biv.burst_type && biv.branch)
@@ -391,36 +496,38 @@ module poe_thm #(
                     end
                 end
             end
-            // ---- cu_done：只统计 done / 推进 cur_ts；不改中间状态，避免覆盖 ISSUED ----
-            if (cu_done_vld && th_state[cu_done_tid] != T_IDLE &&
-            th_state[cu_done_tid] != T_DONE) begin
-                if ({1'b0, th_done[cu_done_tid]} + 4'd1 >= {1'b0, th_need[cu_done_tid]}) begin
-                    if ({1'b0, th_cur_ts[cu_done_tid]} + 4'd1 >= {1'b0, th_ts_n[cu_done_tid]}) begin
-                        th_state[cu_done_tid] <= T_DONE;
-                        csr[cu_done_tid].th_stat <= T_DONE;
-                    end else begin
-                        th_cur_ts[cu_done_tid] <= th_cur_ts[cu_done_tid] + 1'b1;
-                        csr[cu_done_tid].cur_ts <= th_cur_ts[cu_done_tid] + 1'b1;
-                        th_done[cu_done_tid] <= 2'd0;
+            // ---- 完成推进：cu0/cu1/dma 三路 done 聚合后逐事件推进（支持同 tid 多 done、跨 ts） ----
+            for (int u = 0; u < 3; u++) begin
+                if (u < done_n) begin
+                    automatic logic [5:0] dt = done_tid_l[u];
+                    if (th_state[dt] != T_IDLE && th_state[dt] != T_DONE) begin
+                        automatic logic [2:0] dn = th_done[dt] + done_cnt_l[u];
+                        automatic logic [3:0] nts = th_ts_idx[dt];
+                        automatic logic [TS_ID_W-1:0] ncts = th_cur_ts[dt];
+                        automatic logic done_th = 1'b0;
+                        for (int k = 0; k < 8; k++) begin
+                            if (dn >= th_need[dt][nts]) begin
+                                dn = dn - th_need[dt][nts];
+                                if (nts + 1 >= th_ts_n[dt]) begin
+                                    done_th = 1'b1;
+                                    break;
+                                end
+                                nts = nts + 1;
+                                ncts = th_ts_id_r[dt][nts];
+                            end else begin
+                                break;
+                            end
+                        end
+                        if (done_th) begin
+                            th_state[dt] <= T_DONE;
+                            csr[dt].th_stat <= T_DONE;
+                        end else begin
+                            th_done[dt] <= dn;
+                            th_ts_idx[dt] <= nts;
+                            th_cur_ts[dt] <= ncts;
+                            csr[dt].cur_ts <= ncts;
+                        end
                     end
-                end else begin
-                    th_done[cu_done_tid] <= th_done[cu_done_tid] + 1'b1;
-                end
-            end
-            // ---- dma_done：c_task 完成统计（同 cu_done；pre_read 插队 burst 为保留 tid，忽略） ----
-            if (dma_done_vld && (dma_done_tid < MAX_THREADS) &&
-            th_state[dma_done_tid] != T_IDLE && th_state[dma_done_tid] != T_DONE) begin
-                if ({1'b0, th_done[dma_done_tid]} + 4'd1 >= {1'b0, th_need[dma_done_tid]}) begin
-                    if ({1'b0, th_cur_ts[dma_done_tid]} + 4'd1 >= {1'b0, th_ts_n[dma_done_tid]}) begin
-                        th_state[dma_done_tid] <= T_DONE;
-                        csr[dma_done_tid].th_stat <= T_DONE;
-                    end else begin
-                        th_cur_ts[dma_done_tid] <= th_cur_ts[dma_done_tid] + 1'b1;
-                        csr[dma_done_tid].cur_ts <= th_cur_ts[dma_done_tid] + 1'b1;
-                        th_done[dma_done_tid] <= 2'd0;
-                    end
-                end else begin
-                    th_done[dma_done_tid] <= th_done[dma_done_tid] + 1'b1;
                 end
             end
             // ---- 释放：DONE 回 IDLE ----
@@ -429,6 +536,9 @@ module poe_thm #(
                 th_state[i] <= T_IDLE;
                 csr[i].th_stat <= T_IDLE;
             end
+            // ---- dma_ctrl 回写 CSR.cw 条目（loc 申请/free 释放/转交） ----
+            if (cw_upd_vld)
+                csr[cw_upd_tid].cw[cw_upd_ind*48 +: 48] <= cw_upd_data;
             sys_ts_cnt <= sys_ts_cnt + 1'b1;
         end
     end

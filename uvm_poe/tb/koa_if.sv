@@ -56,6 +56,13 @@ interface koa_if #(parameter int NUM_OH_PLANES = 4,
     logic [2:0] out_stream; // 来源流 0..6
     logic [CID_W-1:0] out_cid;
     logic [POS_W-1:0] out_pos;
+    // ---- 预读接口（随 KO 报文：KOA 缓冲后与报文对齐输出） ----
+    logic [3:0] ko_pre_vld; // 入口：4 组预读指示
+    logic [79:0] ko_dma_addr; // 入口：4×20bit smc 地址
+    logic [3:0] ko_pre_op; // 入口：4×1bit 操作类型（0=loc 1=free）
+    logic [3:0] out_pre_vld; // 出口：随 out_vld 对齐
+    logic [79:0] out_dma_addr;
+    logic [3:0] out_pre_op;
 
     clocking drv_cb @(posedge clk);
         default input #1step output #1;
@@ -67,7 +74,8 @@ interface koa_if #(parameter int NUM_OH_PLANES = 4,
         u_e_vld, u_e_data, u_e_pri,
         u_i_vld, u_i_data, u_i_pri;
         input oh_e_rdy, oh_i_rdy, aps_e_rdy, aps_i_rdy, alm_rdy, u_e_rdy, u_i_rdy,
-        out_vld, out_data, out_pri, out_src, out_stream, out_cid, out_pos;
+        out_vld, out_data, out_pri, out_src, out_stream, out_cid, out_pos,
+        out_pre_vld, out_dma_addr, out_pre_op;
     endclocking
 
     clocking mon_cb @(posedge clk);
@@ -80,6 +88,7 @@ interface koa_if #(parameter int NUM_OH_PLANES = 4,
         alm_vld, alm_data, alm_pri, alm_rdy, alm_cid, alm_pos,
         u_e_vld, u_e_data, u_e_pri, u_e_rdy,
         u_i_vld, u_i_data, u_i_pri, u_i_rdy,
-        out_vld, out_data, out_pri, out_src, out_stream, out_cid, out_pos;
+        out_vld, out_data, out_pri, out_src, out_stream, out_cid, out_pos,
+        out_pre_vld, out_dma_addr, out_pre_op;
     endclocking
 endinterface

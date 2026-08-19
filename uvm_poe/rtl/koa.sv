@@ -77,7 +77,14 @@ module koa #(
     output logic [2:0] out_src,
     output logic [2:0] out_stream,
     output logic [CID_W-1:0] out_cid,
-    output logic [POS_W-1:0] out_pos
+    output logic [POS_W-1:0] out_pos,
+    // ---- 预读接口（随 KO 报文：输入随拍写入 SBUF，输出与报文对齐）----
+    input logic [3:0] ko_pre_vld, // 4 组预读指示
+    input logic [79:0] ko_dma_addr, // 4×20bit smc 地址
+    input logic [3:0] ko_pre_op, // 4×1bit 操作类型
+    output logic [3:0] out_pre_vld,
+    output logic [79:0] out_dma_addr,
+    output logic [3:0] out_pre_op
     );
 
     // SBUF 编号：0=EXT 1=INS 2=ALM 3=UART_EXT 4=UART_INS
@@ -85,7 +92,9 @@ module koa #(
     localparam int PRI_Q_DEPTH = SBUF_DEPTH / 8; // 每个 pri 段深度（=320）
     localparam int PTR_W = $clog2(PRI_Q_DEPTH);
     localparam int WR_CNT_W = $clog2(MAX_WR_SEG + 1); // 段内写入条数计数位宽
-    localparam int PKG_W = 3 + CID_W + POS_W + KO_W; // {stream, cid, pos, data}
+    // 条目 {pre_vld(4), dma_addr(80), pre_op(4), stream, cid, pos, data}
+    localparam int PRE_W = 4 + 80 + 4;
+    localparam int PKG_W = PRE_W + 3 + CID_W + POS_W + KO_W;
 
     // ---- 5×SBUF × 8 段存储（每段独立 FIFO）----
     logic [PKG_W-1:0] sbuf_mem [N_SBUF][8][PRI_Q_DEPTH];
@@ -115,27 +124,30 @@ module koa #(
             automatic logic [2:0] g = aps_e_pri[i*3 +: 3];
             aps_e_acc[i] = 1'b0;
             if (aps_e_vld[i] && (sbuf_cnt[0][g] + n_acc[0][g] < PRI_Q_DEPTH)) begin
-                tmp[0][g][n_acc[0][g]] = {3'd2, aps_e_cid[i*CID_W +: CID_W],
-                aps_e_pos[i*POS_W +: POS_W],
-                aps_e_data[i*KO_W +: KO_W]};
+                tmp[0][g][n_acc[0][g]] = {ko_pre_vld, ko_dma_addr, ko_pre_op,
+                                          3'd2, aps_e_cid[i*CID_W +: CID_W],
+                                          aps_e_pos[i*POS_W +: POS_W],
+                                          aps_e_data[i*KO_W +: KO_W]};
                 n_acc[0][g] = n_acc[0][g] + 1'b1;
                 aps_e_acc[i] = 1'b1;
             end
             g = aps_i_pri[i*3 +: 3];
             aps_i_acc[i] = 1'b0;
             if (aps_i_vld[i] && (sbuf_cnt[1][g] + n_acc[1][g] < PRI_Q_DEPTH)) begin
-                tmp[1][g][n_acc[1][g]] = {3'd3, aps_i_cid[i*CID_W +: CID_W],
-                aps_i_pos[i*POS_W +: POS_W],
-                aps_i_data[i*KO_W +: KO_W]};
+                tmp[1][g][n_acc[1][g]] = {ko_pre_vld, ko_dma_addr, ko_pre_op,
+                                          3'd3, aps_i_cid[i*CID_W +: CID_W],
+                                          aps_i_pos[i*POS_W +: POS_W],
+                                          aps_i_data[i*KO_W +: KO_W]};
                 n_acc[1][g] = n_acc[1][g] + 1'b1;
                 aps_i_acc[i] = 1'b1;
             end
             g = alm_pri[i*3 +: 3];
             alm_acc[i] = 1'b0;
             if (alm_vld[i] && (sbuf_cnt[2][g] + n_acc[2][g] < PRI_Q_DEPTH)) begin
-                tmp[2][g][n_acc[2][g]] = {3'd4, alm_cid[i*CID_W +: CID_W],
-                alm_pos[i*POS_W +: POS_W],
-                alm_data[i*KO_W +: KO_W]};
+                tmp[2][g][n_acc[2][g]] = {ko_pre_vld, ko_dma_addr, ko_pre_op,
+                                          3'd4, alm_cid[i*CID_W +: CID_W],
+                                          alm_pos[i*POS_W +: POS_W],
+                                          alm_data[i*KO_W +: KO_W]};
                 n_acc[2][g] = n_acc[2][g] + 1'b1;
                 alm_acc[i] = 1'b1;
             end
@@ -145,18 +157,20 @@ module koa #(
             automatic logic [2:0] g = oh_e_pri[i*3 +: 3];
             oh_e_acc[i] = 1'b0;
             if (oh_e_vld[i] && (sbuf_cnt[0][g] + n_acc[0][g] < PRI_Q_DEPTH)) begin
-                tmp[0][g][n_acc[0][g]] = {3'd0, oh_e_cid[i*CID_W +: CID_W],
-                oh_e_pos[i*POS_W +: POS_W],
-                oh_e_data[i*KO_W +: KO_W]};
+                tmp[0][g][n_acc[0][g]] = {ko_pre_vld, ko_dma_addr, ko_pre_op,
+                                          3'd0, oh_e_cid[i*CID_W +: CID_W],
+                                          oh_e_pos[i*POS_W +: POS_W],
+                                          oh_e_data[i*KO_W +: KO_W]};
                 n_acc[0][g] = n_acc[0][g] + 1'b1;
                 oh_e_acc[i] = 1'b1;
             end
             g = oh_i_pri[i*3 +: 3];
             oh_i_acc[i] = 1'b0;
             if (oh_i_vld[i] && (sbuf_cnt[1][g] + n_acc[1][g] < PRI_Q_DEPTH)) begin
-                tmp[1][g][n_acc[1][g]] = {3'd1, oh_i_cid[i*CID_W +: CID_W],
-                oh_i_pos[i*POS_W +: POS_W],
-                oh_i_data[i*KO_W +: KO_W]};
+                tmp[1][g][n_acc[1][g]] = {ko_pre_vld, ko_dma_addr, ko_pre_op,
+                                          3'd1, oh_i_cid[i*CID_W +: CID_W],
+                                          oh_i_pos[i*POS_W +: POS_W],
+                                          oh_i_data[i*KO_W +: KO_W]};
                 n_acc[1][g] = n_acc[1][g] + 1'b1;
                 oh_i_acc[i] = 1'b1;
             end
@@ -165,11 +179,13 @@ module koa #(
         u_e_acc = u_e_vld && (sbuf_cnt[3][u_e_pri] < PRI_Q_DEPTH);
         u_i_acc = u_i_vld && (sbuf_cnt[4][u_i_pri] < PRI_Q_DEPTH);
         if (u_e_acc) begin
-            tmp[3][u_e_pri][0] = {3'd5, '0, 3'd0, u_e_data};
+                tmp[3][u_e_pri][0] = {ko_pre_vld, ko_dma_addr, ko_pre_op,
+                                      3'd5, '0, 3'd0, u_e_data};
             n_acc[3][u_e_pri] = 1'b1;
         end
         if (u_i_acc) begin
-            tmp[4][u_i_pri][0] = {3'd6, '0, 3'd0, u_i_data};
+                tmp[4][u_i_pri][0] = {ko_pre_vld, ko_dma_addr, ko_pre_op,
+                                      3'd6, '0, 3'd0, u_i_data};
             n_acc[4][u_i_pri] = 1'b1;
         end
         // 拷贝到模块信号
@@ -229,9 +245,12 @@ module koa #(
             out_data <= '0;
             out_pri <= 3'd0;
             out_src <= 3'd0;
-            out_stream <= 3'd0;
-            out_cid <= '0;
-            out_pos <= '0;
+        out_stream <= 3'd0;
+        out_cid <= '0;
+        out_pos <= '0;
+        out_pre_vld <= 4'd0;
+        out_dma_addr <= '0;
+        out_pre_op <= 4'd0;
         end else begin
             // ---- 写入：按段合并写 wr_cnt 条（地址 tail+n，tail 按条数推进）----
             for (int s = 0; s < N_SBUF; s++)
@@ -255,9 +274,12 @@ module koa #(
                 out_vld <= 1'b1;
                 out_pri <= sel_grp;
                 out_src <= sel_grp;
-                out_stream <= sbuf_mem[sel_sbuf][sel_grp][sbuf_head[sel_sbuf][sel_grp]][PKG_W-1:PKG_W-3];
-                out_cid <= sbuf_mem[sel_sbuf][sel_grp][sbuf_head[sel_sbuf][sel_grp]][PKG_W-4-:CID_W];
-                out_pos <= sbuf_mem[sel_sbuf][sel_grp][sbuf_head[sel_sbuf][sel_grp]][PKG_W-4-CID_W-:POS_W];
+        out_pre_vld <= sbuf_mem[sel_sbuf][sel_grp][sbuf_head[sel_sbuf][sel_grp]][PKG_W-1 -: 4];
+        out_dma_addr <= sbuf_mem[sel_sbuf][sel_grp][sbuf_head[sel_sbuf][sel_grp]][PKG_W-5 -: 80];
+        out_pre_op <= sbuf_mem[sel_sbuf][sel_grp][sbuf_head[sel_sbuf][sel_grp]][PKG_W-85 -: 4];
+        out_stream <= sbuf_mem[sel_sbuf][sel_grp][sbuf_head[sel_sbuf][sel_grp]][PKG_W-89 -: 3];
+        out_cid <= sbuf_mem[sel_sbuf][sel_grp][sbuf_head[sel_sbuf][sel_grp]][PKG_W-92 -: CID_W];
+        out_pos <= sbuf_mem[sel_sbuf][sel_grp][sbuf_head[sel_sbuf][sel_grp]][PKG_W-92-CID_W -: POS_W];
                 out_data <= sbuf_mem[sel_sbuf][sel_grp][sbuf_head[sel_sbuf][sel_grp]][KO_W-1:0];
             end else begin
                 out_vld <= 1'b0;
