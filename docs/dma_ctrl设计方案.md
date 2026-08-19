@@ -1,48 +1,153 @@
-﻿# dma_ctrl 设计方案（POE 子模块）
+# dma_ctrl 设计方案与实现详解（POE 子模块）
 
-> 状态：初步方案草案，供讨论与迭代。
+> 本文档以当前实现为准（`uvm_poe/rtl/poe_dma_ctrl.sv`），对应《数据结构位宽总表.md》
+> §5（C 窗）、§6（指令预存）、§7（操作指令接口）、§8（SMC/RBA）。
 
 ## 1. 模块定位
 
-dma_ctrl 负责执行 c_burst 中的 DMA 类任务：
+dma_ctrl 负责执行 c_burst 中的 DMA 类任务（c_task）：
 
-- 接收 **c_task**（c_burst 内含最多 2 个 c_task）；
-- 根据 **tsk_id** 查 **CSR 表**判断具体操作类型；
-- 通过 **RBA 总线**对 DMA 完成对应读 / 写操作；
-- 读操作时，将结果写入 **C窗**；
-- 预留一组 **KOIU → dma_ctrl** 的 KO 报文直连接口，便于后续从 KO 报文提前预读 DMA 信息、减少线程拥塞。
+- 接收 burst_sch 二级发射的 c_task burst（≤2 个 c_task/拍）；
+- 按 c0/c1 + CSR.dma_c 判定实际执行的任务，按 dma_id 查 CSR.cw 得到操作类型
+  （**loc** 锁定 / **free** 释放）与 smc 地址（tag）；
+- **loc**：3 拍查 C 窗（tag 匹配）→ 命中则存入指令预存资源；未命中则申请 C 窗资源、
+  写 C 窗条目、更新 CSR.cw、经 RBA 读 SMC 数据回填 c_line；
+- **free**：同拍同地址去重 → 经 RBA 把 c_line 写回 SMC → cw.o=0 释放资源 → 查指令预存
+  资源转交（同 smc 地址的预存 loc 接管该资源）；
+- 完成一个 burst（1~2 个 c_task）后回一次 `dma_done`（THM 据此推进 cur_ts）；
+- 通过 256 深 FIFO 管理 C 窗资源（资源号 0..255，单线程上限 4），线程结束时由 THM
+  的 `th_rel` 兜底归还。
 
 ## 2. 对外接口
 
-| 方向 | 接口 | 说明 |
+| 方向 | 信号 | 位宽 | 说明 |
+| --- | --- | --- | --- |
+| burst_sch → | `emit_dma_vld` | 1 | c_task burst 发射请求（每拍 ≤1，当前单路） |
+| | `emit_dma_tid` | 6 | 线程 id |
+| | `emit_dma_burst` | 32 | c_burst（c0/c1+dma_id0/1+occ_ts0/1） |
+| | `emit_dma_pre` | 1 | pre_read 插队 burst（不占资源/不回 done） |
+| ← burst_sch | `dma_ack` | 1 | 空闲可收（内部无任务在执行） |
+| THM → | `csr_dma_c` | 512 | 每线程 dma_c（8bit×64） |
+| | `csr_cw` | 24576 | 每线程 cw（384bit×64，只读视图） |
+| | `thread_curts` | 384 | 每线程当前 ts 编号（写 cw.start_ts 用） |
+| | `th_rel_vld`/`th_rel_tid` | 1/6 | 线程结束（兜底归还资源） |
+| → THM | `cw_upd_vld` | 1 | CSR.cw 条目更新请求（loc 申请/free 释放/转交） |
+| | `cw_upd_tid` | 6 | 线程 id |
+| | `cw_upd_ind` | 3 | cw 条目索引（dma_id） |
+| | `cw_upd_data` | 48 | 新 cw 条目（cw_entry_t） |
+| → burst_sch | `cw_fifo_cnt` | 10 | C 窗资源池空闲数（发射条件） |
+| | `th_res_n` | 128 | 每线程已占用资源数（2bit×64，上限 4） |
+| → THM | `dma_done_vld`/`dma_done_tid` | 1/6 | burst 完成（cur_ts 推进） |
+
+> 演进说明：方案中 burst_sch 侧拆出 4 路操作指令（vld+th_id+op_type+smc_addr，28bit/路）。
+> 当前实现保持 burst 粒度接口，在 dma_ctrl 内部完成等价拆分（≤2 task/拍），
+> 待 burst_sch 双发改造时再前移到接口。
+
+## 3. 内部数据结构
+
+### 3.1 操作指令（内部，28bit/路，≤2 路/拍）
+
+| 字段 | 位宽 | 含义 |
 | --- | --- | --- |
-| burst_sch → dma_ctrl | c_task | c_burst 中 ≤2 个 c_task |
-| dma_ctrl → CSR 表 | tsk_id 查询 | 得到操作类型 |
-| dma_ctrl ↔ DMA | RBA 总线 | 读 / 写操作 |
-| dma_ctrl → C窗 | 读结果 | 读操作时写入 |
-| KOIU → dma_ctrl | KO 报文（预留） | 预读 DMA 信息 |
+| vld | 1 | 有效（c 有效且 dma_c 置位） |
+| th_id | 6 | 线程 id |
+| op_type | 1 | loc=0 / free=1（来自 cw[dma_id].op_type） |
+| smc_addr | 20 | tag（来自 cw[dma_id].tag） |
 
-## 3. 内部结构
+### 3.2 指令预存资源（16 深，36bit/项）
 
-- **c_task 解析**：提取 tsk_id；
-- **CSR 表查询**：tsk_id → 操作类型；
-- **RBA 操作控制**：经 RBA 总线对 DMA 发起读 / 写；读结果写回 C窗。
+| 字段 | 位宽 | 含义 |
+| --- | --- | --- |
+| v | 1 | 有效位 |
+| op_addr | 20 | smc 地址 |
+| op_type | 1 | loc / free |
+| th_id | 6 | 线程 id |
+| cw_ind | 8 | 命中的 c 窗资源号 |
+
+### 3.3 C 窗（`c_wnd_mem[256]`，条目 `c_wnd_entry_t` 168bit）
+
+`tag(20) / c_line(128) / d(1) / o(1) / r(1) / cnt(9) / ind(8)`。
+
+### 3.4 CSR.cw 条目（`cw_entry_t` 48bit）
+
+`tag(20) / op_type(1) / r(1) / o(1) / c_line_num(8) / start_ts(8) / occ_ts(8) / rsv(1)`。
+
+### 3.5 资源池 / SMC
+
+- `f_mem[256]`：资源号 FIFO（复位入队 0..255），`f_head/f_tail/f_cnt`；
+- `th_res_n_r[64]`：每线程占用资源数（loc 未命中才 +1，上限 4）；
+- `smc_mem[256][128]`：SMC 缓存模型（tag 低 8bit 索引），RBA 读/写各 1 拍延迟。
 
 ## 4. 处理流程
 
-1. 接收 c_task；
-2. 按 tsk_id 查 CSR 表得到操作类型；
-3. 经 RBA 总线对 DMA 执行对应操作；
-4. 读操作结果写入 C窗；
-5. （预留）KOIU 直连 KO 报文，提前预读 DMA 信息，减少线程拥塞。
+### 4.1 接收与拆任务
 
-## 5. 待确认项
+`emit_dma_vld && !busy && !pre` 时锁存 burst/tid，拆出 ≤2 个有效任务：
 
-- CSR 表的内容与地址映射（tsk_id → 操作类型编码）；
-- RBA 总线协议与 DMA 握手；
-- C窗的地址分配与写回时机；
-- 旁路接口（KO 报文直连）的触发时机与数据格式。
+- task0：`c0 && dma_c[dma_id0]`；task1：`vld_cu && c1 && dma_c[dma_id1]`；
+- 每个任务按 `dma_id` 取 `cw[dma_id]`（tag / op_type），形成内部操作指令；
+- **同拍去重**：同拍两个任务若均为 free 且 smc 地址相同，只执行 task0（端口小者优先）。
 
-## 6. 相关图示
+### 4.2 loc（锁定，0）
 
-- [dma_ctrl 设计](C:/Users/92541/.codex/visualizations/2026/08/06/019fd49a-1e82-7920-a852-d56510961252/dma-ctrl-design-standalone.html)
+1. **3 拍查 C 窗**（SCAN0/1/2）：分 3 组扫描 `c_wnd_mem`（约 85 个/拍），
+   比较 `tag==smc_addr && o==1`；3 拍中任一命中即命中；
+2. **命中**：将操作指令存入指令预存资源（16 深，找空槽写
+   `{v=1, op_addr, op_type, th_id, cw_ind=命中资源号}`），**不占资源**；
+3. **未命中**：
+   a. 申请资源：`f_mem[f_head]` 出队，登记 `th_res_n_r`（上限 4）；
+   b. 写 C 窗条目：`{tag, c_line=0, d=0, o=1, r=0, cnt=0, ind=资源号}`；
+   c. 更新 CSR.cw：`{tag, op_type, r=0, o=1, c_line_num=资源号,
+      start_ts=线程当前 ts 编号, occ_ts=burst.occ_ts, rsv=0}`（`cw_upd` 请求）；
+   d. **RBA 读** SMC[tag]（1 拍延迟），数据回填 C 窗 `c_line` 并置 `r=1`，
+      同时更新 cw.r=1。
+
+### 4.3 free（释放，1）
+
+1. 取 `cw[dma_id]` 的 `c_line_num` → `c_wnd_mem[c_line_num]`；
+2. **RBA 写**：把 C 窗 `c_line` 写入 `smc_mem[tag 低 8bit]`（1 拍延迟）；
+3. **释放**：`cw.o=0`（`cw_upd` 请求），C 窗条目 `o=0`，资源号入 FIFO，
+   `th_res_n_r-1`；
+4. **查指令预存**：找 `v=1 && op_addr==tag` 的项 → 命中则将当前线程 cw 的
+   `c_line_num` 改为预存项的 `cw_ind`、`o=1`（转交），并清预存项 `v=0`。
+
+### 4.4 完成 / 归还
+
+- 一个 burst 的全部有效任务执行完 → `dma_done_vld=1`（1 拍），busy 清；
+- 每次 loc 未命中申请的资源，在其任务完成后归还（FIFO 入队、th_res_n_r-1）；
+- 线程结束 `th_rel` 时兜底归还该线程残留资源（含未完成任务申请的）。
+- pre 插队 burst：不占资源、不执行 loc/free、不回 done（占位，预读语义待细化）。
+
+## 5. 状态机（单任务串行流水）
+
+```
+IDLE --接收--> LOAD（锁存/拆任务）
+  task0: loc → SCAN0/SCAN1/SCAN2 → HIT(存预存) | MISS(申请+写C窗+更新cw+RBA读)
+         free → RBA_W(写SMC) → FREE(释放+查预存转交)
+  task1: 同上（task0 完成后进入）
+  全部完成 → DONE（回 dma_done 1 拍）→ IDLE
+```
+
+`dma_ack = !busy`；busy 从接收拍到完成保持。
+
+## 6. 与现有资源管理的衔接
+
+- burst_sch 的发射条件仍按"每个有效 c_task 需 1 个资源"保守预检查
+  （`cw_fifo_cnt ≥ need && 线程占用+N ≤ 4`）；实际占用仅在 loc 未命中时发生，
+  故实际资源消耗 ≤ 预检查，安全；
+- 原有 `alloc_cnt_r / done_free_n / rel_free_n` 资源收支逻辑重构为按任务粒度
+  （loc 未命中申请、任务完成归还、线程结束兜底）。
+
+## 7. 占位 / 待细化项
+
+- SMC/RBA 总线握手与深度（模型：256×128bit，tag 低 8bit 索引，1 拍延迟）；
+- C 窗条目 `cnt` 老化计数（超上限强制释放）未实现；
+- pre 插队 burst 的预读语义（pre_mes 4 组接口）未实现；
+- 操作指令 4 路接口待 burst_sch 双发改造时前移；
+- CU 改写 c_line 置 `d=1` 的回写路径未接（dma_ctrl 只读 C 窗）。
+
+## 8. 相关文件
+
+- 代码：[poe_dma_ctrl.sv](/C:/Users/92541/Documents/ChatGPT/framer/uvm_poe/rtl/poe_dma_ctrl.sv)
+- 数据类型：[poe_types.sv](/C:/Users/92541/Documents/ChatGPT/framer/uvm_poe/rtl/poe_types.sv)
+- 位宽总表：[数据结构位宽总表.md](/C:/Users/92541/Documents/ChatGPT/framer/docs/数据结构位宽总表.md)

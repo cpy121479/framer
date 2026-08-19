@@ -1,5 +1,6 @@
 # ---- 构建产物 / 仿真输出 ----
 obj_verilator/
+obj_dir/
 *.vcd
 *.log
 simv.exe

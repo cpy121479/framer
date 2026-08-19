@@ -24,17 +24,18 @@
   建线程时同步生成 **CSR 表项**（err/ccr/sys_ts/th_id(6b)/th_stat/o_mes/cur_ts/vtsk_c/
   dma_c/tw/cw(8×6B)），逐步替换临时字段（th_stat/cur_ts 已同步）。
 - **th_sch**：按 (pri, tid) 排序固定发射 ≤2（同 pri tid 小优先，不足从次低补）。
-- **burst_sch**：二级发射，队头公共条件 = `q.ts==cur_ts` 且无 O 窗反压（`tr`，所有 burst；
-  pre_read 插队 burst 跳过 ts 检查）；c_task burst（`burst_type=1`）按 c0/c1 判任务有效、
-  查 CSR.dma_c 确认生效，得需执行任务数 N，**C 窗资源池可用**才放行（FIFO 空闲 ≥ N 且
-  线程占用 + N ≤ 4）；生成操作指令 `{vld,th_id,op_type,smc_addr}`（≤4 路/拍）；
-  ts 小优先、同 ts 按 rr 轮询，每拍最多 1 个；**i/v_task → CU/EU，c_task → dma_ctrl**。
-- **CU/EU 桩 / dma_ctrl 桩**：各延迟 1 拍执行完，回 `cu_done/dma_done + tid`；dma_ctrl
-  通过 **256 深 FIFO** 管理 C 窗资源（资源条目 168bit=21B；c_task 执行完归还 + 线程结束
-  兜底，单线程上限 4），按 op_type 处理 **loc**（3 拍查 C 窗/申请资源/更新 CSR.cw/RBA 读）
-  与 **free**（同拍去重/RBA 写 c_line/cw.o=0/查指令预存转交）；
-  branch burst 后 THM 预取等待 (3+t) 拍
-  （t 随机 0..n，n=当拍 READY 中 branch burst 数）。
+- **burst_sch**：二级发射，**每拍 ≤2 个**（q0/q1 各自独立判断队头）；公共条件 =
+  `q.ts==cur_ts` 且无 O 窗反压（`tr`）；c_task（`burst_type=1`）按 c0/c1+CSR.dma_c 判
+  有效任务数 N，**C 窗资源池可用**才放行（FIFO 空闲 ≥ N 且线程占用 + N ≤ 4）；
+  路由：i/v_task → **CU0/CU1 两个单元**（q0→CU0、q1→CU1），c_task → dma_ctrl
+  （dma 单路，两路 c_task 同拍只发 q0）。
+- **CU 桩 ×2**：CU0/CU1 各 LATENCY 后回 `cu_done + tid`（vtsk_c 判定未实现）；
+  THM 聚合三路 done（cu0/cu1/dma）按 tid 推进 cur_ts（支持同 tid 同拍多 done、跨 ts）。
+- **dma_ctrl**：完整 c_task 执行（loc/free）——loc 3 拍查 C 窗（命中存 16 深指令预存；
+  未命中申请 C 窗资源、写 168bit 资源条目、更新 CSR.cw、RBA 读 SMC 回填 c_line）；
+  free 同拍同地址去重、RBA 写回 SMC、释放资源并查指令预存转交；256 深 FIFO 管理
+  资源（单线程上限 4），线程结束兜底归还；pre 插队不占资源；burst 执行完回一次
+  `dma_done`（THM cur_ts 推进）。
 
 ## 通道时隙表
 
