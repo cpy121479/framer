@@ -5,6 +5,10 @@
 //   csr_t     614bit：err/ccr/sys_ts/th_id(6b)/th_stat/o_mes/cur_ts/vtsk_c/dma_c/tw/cw
 //   cw_entry  48bit（8×6B/线程，dma_id 索引）
 //   c_wnd_entry 168bit（21B，C 窗资源条目）
+// C 窗分独享/共享两类（dma_ctrl 管理）：
+//   独享 64×4：每线程固定 4 个位置（全局号 = tid×4+k，k=0..3），cw[dma_id 0..3] 固定映射；
+//   共享 256：由 dma_ctrl 资源管理 FIFO 分配，cw[dma_id 4..7] 固定映射。
+// 资源生命周期完全由 c_task 控制（lock/free 成对出现），线程结束不兜底归还。
 // ============================================================================
 package poe_types_pkg;
 

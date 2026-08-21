@@ -31,6 +31,9 @@ THM 是 KOA → POE 链路的枢纽：接收 KO 报文与线程描述，按 `(st
   （限制带预读请求的 KO 报文创建线程）。
 - **CSR 同步生成**：建线程时同步写 `csr_t` 表项（th_stat / cur_ts 与状态机同步），
   `dma_c` / `cw` 暴露给 burst_sch / dma_ctrl 查询。
+- **线程级互斥锁**：KO 报文可携带加锁请求（锁 ID 0..15，16 个独立锁），同一锁
+  同一时刻只允许一个线程执行（一级发射门控），从根源避免多个线程并发操作同一
+  smc 地址——dma_ctrl 的 loc/free 不再出现跨线程冲突场景（成对执行，零资源泄漏）。
 
 ## 2. 参数
 
@@ -42,6 +45,7 @@ THM 是 KOA → POE 链路的枢纽：接收 KO 报文与线程描述，按 `(st
 | `TS_ID_W` | 6 | ts 编号位宽（0..63，容纳跳转） |
 | `CID_W` | 17 | 保序键通道号位宽 |
 | `BUF_DEPTH` | 8 | 保序报文缓存深度 |
+| `N_LOCK` | 16 | 线程级互斥锁数量（锁 ID 0..15） |
 
 内部位宽派生：`TS_W = $clog2(MAX_TS+1)`（=5，ts 数 1..16）；`th_bs_pc` / `th_off` 为 7bit
 （最大 16ts×4burst=64）；`th_sel_ts` 为 4bit（ts 序号 0..15）；`th_sel_idx` 为 3bit
@@ -61,6 +65,8 @@ THM 是 KOA → POE 链路的枢纽：接收 KO 报文与线程描述，按 `(st
 | `ko_pre_vld` | 4 | 预读入口指示（4 组，随 KO 报文；=1 时该组预读有效） |
 | `ko_dma_addr` | 80 | 预读入口 smc 地址（4×20bit） |
 | `ko_pre_op` | 4 | 预读入口操作类型（4×1bit：0=loc 1=free） |
+| `ko_lock_vld` | 1 | 线程级互斥锁请求（随 KO 报文；=1 时该报文创建的线程申请锁） |
+| `ko_lock_id` | 4 | 锁 ID（0..15） |
 | `th_ts_cnt` | 5 | 线程 ts 数（1..16） |
 | `th_bs_cnt` | 48 | 每 ts burst 数（16×3bit，ts0 固定 1） |
 | `th_ts_id` | 96 | 每 ts 编号（16×6bit，递增可跳转） |
@@ -112,7 +118,9 @@ THM 是 KOA → POE 链路的枢纽：接收 KO 报文与线程描述，按 `(st
 | `csr_cw` | 24576 | 每线程 cw（384bit×64） |
 | `pre_dma_c` | 8 | pre 独立占位 dma_c（全 1） |
 | `pre_cw` | 256 | pre 独立占位 cw（tag 取 KO 首字节） |
-| `th_rel_vld` / `th_rel_tid` | 1/6 | 线程结束通知（T_DONE 拍，dma_ctrl 兜底归还） |
+
+> C 窗资源生命周期完全由 c_task 控制（lock/free 成对出现），**线程结束不再输出
+> th_rel 兜底归还**；T_DONE 仅用于线程状态回收（槽位复用）与互斥锁释放。
 
 ## 4. 内部数据结构
 
@@ -131,7 +139,8 @@ THM 是 KOA → POE 链路的枢纽：接收 KO 报文与线程描述，按 `(st
 | `th_ts_idx` | 4 | 当前在第几个 ts（序号 0..n-1） |
 | `th_ts_id_r` | 6×16 | 每 ts 编号（递增可跳转） |
 | `th_wait` | 8 | ISSUED 剩余打拍数（branch 1+3+t / 非 branch 1） |
-| `th_done` | 3 | 当前 ts 已完成 burst 数 |
+| `th_lock_vld` / `th_lock_id` | 1 / 4 | 线程互斥锁请求 / 锁 ID（随 KO 报文/缓存） |
+| `th_done_acc` | 3×16 | 每 ts 已完成 burst 数（done 按 tidx 累加） |
 | `th_need` | 3×16 | 每 ts 实际执行 burst 数（首个 branch 提前截断） |
 | `th_off` | 7×17 | 每 ts 起始累计偏移（off[k] = 前 k 个 ts 总长，组合） |
 | `th_sel_ts` | 4 | bs_pc 所属 ts 序号（组合） |
@@ -150,12 +159,22 @@ vtsk_c(8) / dma_c(8) / tw(64) / cw(8×48)`。
 `th_stat` 随状态机（READY/ISSUED/DONE/IDLE），`cur_ts` 随 done 推进写 ts 编号；
 `err / ccr / o_mes / tw` 为占位 0。
 
+### 4.4 线程级互斥锁表（`lock_owner[16]`）
+
+| 信号 | 位宽 | 含义 |
+| --- | --- | --- |
+| `lock_owner[i]` | 6 | 锁 i 的持有线程 tid；`63`=空闲 |
+
+> 锁与线程生命周期绑定：线程在一级发射（首次发射）时获取锁，T_DONE 时释放；
+> 同锁其他线程的 `ready_mask` 置 0（等待），锁释放后恢复可发射。锁 ID 由 KO
+> 旁路接口（`ko_lock_vld / ko_lock_id`）随报文/保序缓存携带。
+
 ### 4.3 保序报文缓存（`buf_mem[BUF_DEPTH]`）
 
-每条缓存一个完整 KO+线程描述打包（PKG_W = 3007bit），布局（高位→低位）：
+每条缓存一个完整 KO+线程描述打包（PKG_W = 3012bit），布局（高位→低位）：
 
 ```
-ko_data(384) | stream(3) | cid(17) | pos(3) | ts_cnt(5) | ts_id(96) |
+lock(5) | pre(88) | ko_data(384) | stream(3) | cid(17) | pos(3) | ts_cnt(5) | ts_id(96) |
 bs_cnt(48) | pri(3) | burst_seq(2048) | vtsk_c(8) | dma_c(8) | cw(384)
 ```
 
@@ -216,6 +235,12 @@ tail+1、cnt+1。缓存满时 `can_accept=0` → `ko_rdy=0` 反压，vld 保持�
 - 取当前 burst `th_burst_r[th_sel_ts][th_sel_idx]`；
 - 状态 → ISSUED，CSR.th_stat 同步；
 - 打拍数：非 branch 1 拍；i/v branch `4 + $urandom % (branch_cnt+1)`（即 1+3+t）。
+- **互斥锁获取**：请求锁的线程在发射拍若锁空闲则登记持锁
+  （`lock_owner[th_lock_id] <= tid`）；同拍两个发射同锁时让 iss0 优先。
+
+> 一级发射门控（ready_mask）：`!th_lock_vld || lock_owner[lock_id]==tid ||
+> lock_owner[lock_id]==FREE`——同锁线程中只有持锁者（或锁空闲待抢）可发射，
+> 未持锁线程的 ready_mask=0 等待，直到持锁线程 T_DONE 释放。
 
 ### 6.5 ISSUED 打拍推进 bs_pc
 
@@ -239,14 +264,15 @@ bs_pc 跨 ts 连续递增，因此 burst 队列可包含当前 ts 及更靠后 t
 
 ### 6.7 线程释放
 
-组合逻辑检测 T_DONE 输出 `th_rel_vld/tid`（同拍一个，逐拍处理）；时序侧将 T_DONE 回 IDLE、
-CSR.th_stat 同步，槽位可复用。dma_ctrl 收到 th_rel 后兜底归还该线程残留 C 窗资源。
+时序侧将 T_DONE 回 IDLE、CSR.th_stat 同步，槽位可复用；若本线程是某互斥锁的
+持有者（`lock_owner[th_lock_id]==tid`），同拍释放该锁（`lock_owner<=FREE`），
+等待同锁的线程恢复可发射。C 窗资源不随线程释放（lock/free 由 c_task 成对控制）。
 
 ## 7. 占位 / 待细化项
 
 - `emit_vld/emit_tid`（burst_sch 二级发射通知）声明但未使用；
-- dma_ctrl 转交/兜底存在少量边界竞态（预存线程 cw 更新未生效前线程结束），
-  200µs 回归资源泄漏约 0.85%（f_cnt 225/256），SCB 错配 0，待后续优化；
+- 200µs 回归：互斥锁机制下同锁线程互斥执行，loc/free 严格成对，
+  共享资源 **alloc=free**（零泄漏，f_cnt=256），SCB 错配 0；
 - pre_read 接口已按方案实现：KOA 预读随报文入 SBUF（出队对齐输出）→ THM 建线程同拍
   转发（4 组 {vld,tid,dma_addr,op}）→ burst_sch 8 深预读缓存（最高优先级调度、满反压）；
   dma_ctrl 预读入口接收即吸收（占位，预读执行语义待细化）；
