@@ -11,7 +11,7 @@
 //   同步；dma_c/cw 暴露给 dma_ctrl / burst_sch（c_task 按 dma_id 查询）
 // - pre_read 插队：KO 带 pre_read 时直接注入一条 c_task burst（不建线程/不查保序），
 //   靠 burst 队列项 pre 标志区分（th_id 无保留值）；预读接口 pre_mes 4 组，模型占位单路
-// - 线程结束（T_DONE）时输出 th_rel_vld/tid，通知 dma_ctrl 兜底归还 C 窗资源
+// - C 窗资源生命周期完全由 c_task（loc/free 成对）控制，线程结束不通知 dma_ctrl 归还
 // ============================================================================
 module poe_thm #(
     parameter int MAX_THREADS = 64,
@@ -32,6 +32,8 @@ module poe_thm #(
     input logic [3:0] ko_pre_vld, // 预读入口指示（4 组，随 KO 报文）
     input logic [79:0] ko_dma_addr, // 预读入口 smc 地址（4×20bit）
     input logic [3:0] ko_pre_op, // 预读入口操作类型（4×1bit）
+    input logic ko_lock_vld, // 线程级互斥锁请求（同锁线程互斥执行，避免 smc 地址冲突）
+    input logic [3:0] ko_lock_id, // 锁 ID（0..15，16 个独立锁）
     input logic [$clog2(MAX_TS+1)-1:0] th_ts_cnt, // 线程 ts 数（1..MAX_TS）
     input logic [MAX_TS*3-1:0] th_bs_cnt, // 每 ts burst 数（4×3bit，各 ts 独立；ts0 固定 1）
     input logic [MAX_TS*TS_ID_W-1:0] th_ts_id, // 每 ts 编号（递增可跳转，模拟 ts 跳转）
@@ -45,6 +47,7 @@ module poe_thm #(
     output logic [MAX_THREADS-1:0] ready_mask, // READY 且未到头线程位图
     output logic [MAX_THREADS*3-1:0] ready_pri, // 每线程 burst 优先级
     output logic [MAX_THREADS*TS_ID_W-1:0] ready_burst_ts, // 发射 burst 所属 ts 编号（由 bs_pc 推导）
+    output logic [MAX_THREADS*4-1:0] ready_burst_tidx, // 发射 burst 所属 ts 序号（done 归属用）
     output logic [MAX_THREADS*TS_ID_W-1:0] ready_curts, // 当前 ts 编号（cu_done/dma_done 推进）
     output logic [MAX_THREADS*32-1:0] ready_burst, // 发射 burst（bs_pc 索引，32bit）
     input logic iss_vld0,
@@ -54,10 +57,13 @@ module poe_thm #(
     // ---- CU（2 单元）/ dma_ctrl 完成：cur_ts 推进依赖完成统计 ----
     input logic cu_done_vld0,
     input logic [5:0] cu_done_tid0,
+    input logic [3:0] cu_done_tidx0,
     input logic cu_done_vld1,
     input logic [5:0] cu_done_tid1,
+    input logic [3:0] cu_done_tidx1,
     input logic dma_done_vld,
     input logic [5:0] dma_done_tid,
+    input logic [3:0] dma_done_tidx,
     // ---- burst_sch 二级发射通知（打拍起点，占位） ----
     input logic emit_vld,
     input logic [5:0] emit_tid,
@@ -76,10 +82,7 @@ module poe_thm #(
     input logic [2:0] cw_upd_ind,
     input logic [47:0] cw_upd_data,
     output logic [7:0] pre_dma_c,
-    output logic [255:0] pre_cw,
-    // ---- 线程释放通知（→ dma_ctrl 归还该线程 C 窗资源） ----
-    output logic th_rel_vld,
-    output logic [5:0] th_rel_tid
+    output logic [255:0] pre_cw
     );
 
     import poe_types_pkg::*;
@@ -101,13 +104,20 @@ module poe_thm #(
     logic [3:0] th_ts_idx [MAX_THREADS]; // 当前在第几个 ts（序号 0..n-1）
     logic [TS_ID_W-1:0] th_ts_id_r [MAX_THREADS][MAX_TS]; // 每 ts 编号（递增可跳转）
     logic [7:0] th_wait [MAX_THREADS];
-    logic [2:0] th_done [MAX_THREADS]; // 当前 ts 已完成 burst 数
+    logic th_lock_vld [MAX_THREADS]; // 线程是否请求互斥锁（随 KO 报文）
+    logic [3:0] th_lock_id [MAX_THREADS]; // 请求的锁 ID
+    logic [2:0] th_done_acc [MAX_THREADS][MAX_TS]; // 每 ts 已完成 burst 数（done 按发射序匹配）
     logic [2:0] th_need [MAX_THREADS][MAX_TS]; // 每 ts 实际执行 burst 数（branch 提前后）
-    logic [6:0] th_off [MAX_THREADS][MAX_TS+1]; // 每 ts 起始累计偏移（off[k]=前 k 个 ts 总长）
+    logic [6:0] th_off [MAX_THREADS][MAX_TS+1]; // 每 ts 起始累计偏移（off[k]=前 k 个 ts 的 need 和）
     logic [3:0] th_sel_ts [MAX_THREADS]; // bs_pc 所属 ts 序号（组合推导）
     logic [2:0] th_sel_idx [MAX_THREADS]; // bs_pc 在所属 ts 内的 burst 序号（组合推导）
     csr_t csr [MAX_THREADS];
     logic [47:0] sys_ts_cnt; // 系统时戳计数（1GHz 拍，48bit）
+
+    // ---- 线程级互斥锁表（16 个锁，锁 ID 独立编号；FREE=63 表示空闲） ----
+    localparam int N_LOCK = 16;
+    localparam logic [5:0] LOCK_FREE = 6'd63;
+    logic [5:0] lock_owner [N_LOCK]; // 持锁线程 tid；LOCK_FREE=空闲
 
     // ---- 8 深报文缓存（保序等待） ----
     localparam int KO_W = 384;
@@ -121,12 +131,16 @@ module poe_thm #(
     localparam int CW_W = 384;
     // 预读字段（随报文缓存）：{pre_vld(4), dma_addr(80), op(4)}
     localparam int PRE_VEC_W = 88;
-    localparam int PKG_W = PRE_VEC_W + KO_W + ST_W + CID_W + 3 + TS_W + TS_ID_VEC_W + BS_W + PR_W
-    + BURST_PAT_W + 8 + DMA_C_W + CW_W;
-    localparam int PRE_VLD_MSB = PKG_W - 1;
-    localparam int PRE_ADDR_MSB = PKG_W - 5;
-    localparam int PRE_OP_MSB = PKG_W - 85;
-    localparam int KO_MSB = PKG_W - 89;
+    // 锁字段（随报文缓存）：{lock_vld(1), lock_id(4)}
+    localparam int LOCK_VEC_W = 5;
+    localparam int PKG_W = LOCK_VEC_W + PRE_VEC_W + KO_W + ST_W + CID_W + 3 + TS_W +
+    TS_ID_VEC_W + BS_W + PR_W + BURST_PAT_W + 8 + DMA_C_W + CW_W;
+    localparam int LOCK_MSB = PKG_W - 1;
+    localparam int LOCK_ID_MSB = PKG_W - 2;
+    localparam int PRE_VLD_MSB = PKG_W - 6;
+    localparam int PRE_ADDR_MSB = PKG_W - 10;
+    localparam int PRE_OP_MSB = PKG_W - 90;
+    localparam int KO_MSB = PKG_W - 94;
     localparam int ST_MSB = KO_MSB - KO_W;
     localparam int CID_MSB = ST_MSB - ST_W;
     localparam int POS_MSB = CID_MSB - CID_W;
@@ -232,31 +246,22 @@ module poe_thm #(
         end
     end
 
-    // 线程释放通知：T_DONE 拍通知 dma_ctrl 归还该线程 C 窗资源（同拍仅一个，逐拍处理）
-    always_comb begin
-        th_rel_vld = 1'b0;
-        th_rel_tid = '0;
-        for (int i = 0; i < MAX_THREADS; i++)
-        if (th_state[i] == T_DONE) begin
-            th_rel_vld = 1'b1;
-            th_rel_tid = i[5:0];
-            break;
-        end
-    end
-
     // ---- 完成事件聚合：cu0/cu1/dma 三路 done 按 tid 合并（同 tid 同拍累加） ----
     logic [1:0] done_n; // 本拍 done 事件数（0..3）
     logic [5:0] done_tid_l [3];
+    logic [3:0] done_tidx_l [3];
     logic [1:0] done_cnt_l [3];
     always_comb begin
         done_n = 2'd0;
         if (cu_done_vld0) begin
             automatic int f = -1;
             for (int k = 0; k < 3; k++)
-                if ((k < done_n) && (done_tid_l[k] == cu_done_tid0)) f = k;
+                if ((k < done_n) && (done_tid_l[k] == cu_done_tid0) &&
+                    (done_tidx_l[k] == cu_done_tidx0)) f = k;
             if (f >= 0) done_cnt_l[f] = done_cnt_l[f] + 1'b1;
             else begin
                 done_tid_l[done_n] = cu_done_tid0;
+                done_tidx_l[done_n] = cu_done_tidx0;
                 done_cnt_l[done_n] = 2'd1;
                 done_n = done_n + 1'b1;
             end
@@ -264,10 +269,12 @@ module poe_thm #(
         if (cu_done_vld1) begin
             automatic int f = -1;
             for (int k = 0; k < 3; k++)
-                if ((k < done_n) && (done_tid_l[k] == cu_done_tid1)) f = k;
+                if ((k < done_n) && (done_tid_l[k] == cu_done_tid1) &&
+                    (done_tidx_l[k] == cu_done_tidx1)) f = k;
             if (f >= 0) done_cnt_l[f] = done_cnt_l[f] + 1'b1;
             else begin
                 done_tid_l[done_n] = cu_done_tid1;
+                done_tidx_l[done_n] = cu_done_tidx1;
                 done_cnt_l[done_n] = 2'd1;
                 done_n = done_n + 1'b1;
             end
@@ -275,17 +282,20 @@ module poe_thm #(
         if (dma_done_vld && (dma_done_tid < MAX_THREADS)) begin
             automatic int f = -1;
             for (int k = 0; k < 3; k++)
-                if ((k < done_n) && (done_tid_l[k] == dma_done_tid)) f = k;
+                if ((k < done_n) && (done_tid_l[k] == dma_done_tid) &&
+                    (done_tidx_l[k] == dma_done_tidx)) f = k;
             if (f >= 0) done_cnt_l[f] = done_cnt_l[f] + 1'b1;
             else begin
                 done_tid_l[done_n] = dma_done_tid;
+                done_tidx_l[done_n] = dma_done_tidx;
                 done_cnt_l[done_n] = 2'd1;
                 done_n = done_n + 1'b1;
             end
         end
     end
 
-    // ---- 每 ts 起始累计偏移（off[k] = 前 k 个 ts 的 burst 总数）----
+    // ---- 每 ts 起始累计偏移（off[k] = 前 k 个 ts 的 need 和；bs_pc 只推进到需执行的
+    // burst，branch 截断的槽位不计入，映射与 th_burst_r 物理槽位一致）----
     always_comb begin
         for (int i = 0; i < MAX_THREADS; i++) begin
             th_off[i][0] = 7'd0;
@@ -308,11 +318,20 @@ module poe_thm #(
     // ---- 可发射 / 调度辅助 ----
     always_comb begin
         for (int i = 0; i < MAX_THREADS; i++) begin
-            // 可发射：READY 且总流水未到头（跨 ts 连续，队列允许超前 ts 的 burst）
+            // 可发射：READY 且总流水未到头；只发射当前 ts 或下一个 ts 的 burst
+            // （提前过多会在 burst_sch 条件① q.ts==cur_ts 下卡住共享队列队头）；
+            // 线程级互斥锁：请求锁的线程只有持锁者（或锁空闲待抢）可发射，
+            // 同锁线程互斥执行，从根源避免同一 smc 地址被并发操作
             ready_mask[i] = (th_state[i] == T_READY) &&
-                (th_bs_pc[i] < th_off[i][th_ts_n[i]]);
+                (th_bs_pc[i] < th_off[i][th_ts_n[i]]) &&
+                (th_sel_ts[i] >= th_ts_idx[i]) &&
+                (th_sel_ts[i] <= th_ts_idx[i] + 1) &&
+                (!th_lock_vld[i] ||
+                 lock_owner[th_lock_id[i]] == i[5:0] ||
+                 lock_owner[th_lock_id[i]] == LOCK_FREE);
             ready_pri[i*3 +: 3] = th_pri_r[i];
             ready_burst_ts[i*TS_ID_W +: TS_ID_W] = th_ts_id_r[i][th_sel_ts[i]]; // 输出 ts 编号
+            ready_burst_tidx[i*4 +: 4] = th_sel_ts[i]; // 输出 ts 序号（done 归属）
             ready_curts[i*TS_ID_W +: TS_ID_W] = th_cur_ts[i];
             ready_burst[i*32 +: 32] =
                 th_burst_r[i][th_sel_ts[i]][th_sel_idx[i]];
@@ -350,10 +369,13 @@ module poe_thm #(
                 th_ts_idx[i] <= '0;
                 for (int k = 0; k < MAX_TS; k++) th_ts_id_r[i][k] <= '0;
                 th_wait[i] <= '0;
-                th_done[i] <= '0;
+                th_lock_vld[i] <= 1'b0;
+                th_lock_id[i] <= 4'd0;
+                for (int k = 0; k < MAX_TS; k++) th_done_acc[i][k] <= '0;
                 for (int k = 0; k < MAX_TS; k++) th_need[i][k] <= '0;
                 csr[i] <= '0;
             end
+            for (int i = 0; i < N_LOCK; i++) lock_owner[i] <= LOCK_FREE;
             buf_head <= '0;
             buf_tail <= '0;
             buf_cnt <= '0;
@@ -373,12 +395,14 @@ module poe_thm #(
                 automatic logic [2:0] pr;
                 automatic logic [BURST_PAT_W-1:0] bp;
                 automatic logic [7:0] vtsk, dc;
-                automatic logic [255:0] cw;
+                automatic logic [CW_W-1:0] cw; // 8×6B=384bit（之前 256bit 截断丢共享半区）
+                automatic logic lk_v;
+                automatic logic [3:0] lk_id;
                 logic from_buf;
                 from_buf = 1'b0;
                 s = -1;
                 d = '0; st = 0; c = '0; p = 0; ts = 0; bs = 0; tid_vec = 0; pr = 0;
-                bp = '0; vtsk = 0; dc = 0; cw = '0;
+                bp = '0; vtsk = 0; dc = 0; cw = '0; lk_v = 0; lk_id = 0;
                 if (buf_ok) begin
                     from_buf = 1'b1;
                     s = buf_head;
@@ -394,12 +418,15 @@ module poe_thm #(
                     vtsk = buf_mem[buf_head][VTSK_MSB -: 8];
                     dc = buf_mem[buf_head][DMA_C_MSB -: DMA_C_W];
                     cw = buf_mem[buf_head][CW_MSB -: CW_W];
+                    lk_v = buf_mem[buf_head][LOCK_MSB -: 1];
+                    lk_id = buf_mem[buf_head][LOCK_ID_MSB -: 4];
                 end else if (ko_vld && ko_rdy &&
                     !key_active(ko_stream, ko_cid, ko_pos) && t >= 0) begin
                     from_buf = 1'b0;
                     d = ko_data; st = ko_stream; c = ko_cid; p = ko_pos;
                     ts = th_ts_cnt; bs = th_bs_cnt; tid_vec = th_ts_id; pr = th_pri;
                     bp = th_burst_seq; vtsk = th_vtsk_c_seq; dc = th_dma_c_seq; cw = th_cw_seq;
+                    lk_v = ko_lock_vld; lk_id = ko_lock_id;
                 end
                 if (t >= 0 && (from_buf || (ko_vld && ko_rdy &&
                 !key_active(ko_stream, ko_cid, ko_pos)))) begin
@@ -432,7 +459,9 @@ module poe_thm #(
                     th_cur_ts[t] <= tid_vec[TS_ID_W-1:0]; // 首个 ts 编号（约定 0）
                     th_ts_idx[t] <= 4'd0;
                     th_wait[t] <= 8'd0;
-                    th_done[t] <= 2'd0;
+                    th_lock_vld[t] <= lk_v;
+                    th_lock_id[t] <= lk_id;
+                    for (int k = 0; k < MAX_TS; k++) th_done_acc[t][k] <= 3'd0;
                     // ---- CSR 表项：建线程时同步生成 ----
                     csr[t].err <= 8'd0;
                     csr[t].ccr <= 64'd0;
@@ -454,7 +483,7 @@ module poe_thm #(
             // ---- 直接到达入缓存（同 key 活跃时） ----
             if (ko_vld && ko_rdy &&
             key_active(ko_stream, ko_cid, ko_pos) && !buf_full) begin
-                buf_mem[buf_tail] <= {ko_pre_vld, ko_dma_addr, ko_pre_op,
+                buf_mem[buf_tail] <= {ko_lock_vld, ko_lock_id, ko_pre_vld, ko_dma_addr, ko_pre_op,
                 ko_data, ko_stream, ko_cid, ko_pos,
                 th_ts_cnt, th_ts_id, th_bs_cnt, th_pri,
                 th_burst_seq, th_vtsk_c_seq, th_dma_c_seq, th_cw_seq};
@@ -468,6 +497,9 @@ module poe_thm #(
                 biv = th_burst_r[iss_tid0][th_sel_ts[iss_tid0]][th_sel_idx[iss_tid0]];
                 th_state[iss_tid0] <= T_ISSUED;
                 csr[iss_tid0].th_stat <= T_ISSUED;
+                if (th_lock_vld[iss_tid0] &&
+                    lock_owner[th_lock_id[iss_tid0]] == LOCK_FREE)
+                    lock_owner[th_lock_id[iss_tid0]] <= iss_tid0; // 一级发射时获取互斥锁
                 if (!biv.burst_type && biv.branch)
                     th_wait[iss_tid0] <= 4 + ($urandom % (branch_cnt + 1)); // 1 + 3 + t
                 else
@@ -479,6 +511,11 @@ module poe_thm #(
                 biv = th_burst_r[iss_tid1][th_sel_ts[iss_tid1]][th_sel_idx[iss_tid1]];
                 th_state[iss_tid1] <= T_ISSUED;
                 csr[iss_tid1].th_stat <= T_ISSUED;
+                if (th_lock_vld[iss_tid1] &&
+                    lock_owner[th_lock_id[iss_tid1]] == LOCK_FREE &&
+                    !(iss_vld0 && th_lock_vld[iss_tid0] &&
+                      th_lock_id[iss_tid1] == th_lock_id[iss_tid0]))
+                    lock_owner[th_lock_id[iss_tid1]] <= iss_tid1; // 与 iss0 同锁时让 iss0 先占
                 if (!biv.burst_type && biv.branch)
                     th_wait[iss_tid1] <= 4 + ($urandom % (branch_cnt + 1));
                 else
@@ -501,13 +538,17 @@ module poe_thm #(
                 if (u < done_n) begin
                     automatic logic [5:0] dt = done_tid_l[u];
                     if (th_state[dt] != T_IDLE && th_state[dt] != T_DONE) begin
-                        automatic logic [2:0] dn = th_done[dt] + done_cnt_l[u];
+                        // done 由执行单元带回 ts 序号（发射时随 burst 下发），直接累加对应 ts
+                        automatic logic [2:0] sh [MAX_TS];
                         automatic logic [3:0] nts = th_ts_idx[dt];
                         automatic logic [TS_ID_W-1:0] ncts = th_cur_ts[dt];
                         automatic logic done_th = 1'b0;
+                        for (int k = 0; k < MAX_TS; k++) sh[k] = th_done_acc[dt][k];
+                        if (done_tidx_l[u] < MAX_TS)
+                            sh[done_tidx_l[u]] = sh[done_tidx_l[u]] + done_cnt_l[u];
+                        th_done_acc[dt][done_tidx_l[u]] <= sh[done_tidx_l[u]];
                         for (int k = 0; k < 8; k++) begin
-                            if (dn >= th_need[dt][nts]) begin
-                                dn = dn - th_need[dt][nts];
+                            if (sh[nts] >= th_need[dt][nts]) begin
                                 if (nts + 1 >= th_ts_n[dt]) begin
                                     done_th = 1'b1;
                                     break;
@@ -522,7 +563,6 @@ module poe_thm #(
                             th_state[dt] <= T_DONE;
                             csr[dt].th_stat <= T_DONE;
                         end else begin
-                            th_done[dt] <= dn;
                             th_ts_idx[dt] <= nts;
                             th_cur_ts[dt] <= ncts;
                             csr[dt].cur_ts <= ncts;
@@ -530,11 +570,14 @@ module poe_thm #(
                     end
                 end
             end
-            // ---- 释放：DONE 回 IDLE ----
+            // ---- 释放：DONE 回 IDLE（C 窗资源不随线程释放，由 c_task loc/free 成对管理；
+            // 线程级互斥锁随线程释放，等待同锁的线程恢复发射） ----
             for (int i = 0; i < MAX_THREADS; i++)
             if (th_state[i] == T_DONE) begin
                 th_state[i] <= T_IDLE;
                 csr[i].th_stat <= T_IDLE;
+                if (th_lock_vld[i] && lock_owner[th_lock_id[i]] == i[5:0])
+                    lock_owner[th_lock_id[i]] <= LOCK_FREE;
             end
             // ---- dma_ctrl 回写 CSR.cw 条目（loc 申请/free 释放/转交） ----
             if (cw_upd_vld)
