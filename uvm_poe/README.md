@@ -88,6 +88,55 @@ TESTNAME=koa_smoke_test RUN_US=30 N_OH_PLANES=4 OH_SLOTS=9520 \
   q0/q1 槽池峰值。
 - THM 保序缓存/线程状态的断言级 UVM 验证为后续扩展（当前靠事件日志与守恒检查）。
 
+## Benchmark
+
+场景参数（环境变量，run 脚本转 plusarg）：
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `SEED` | 不设（随机） | `$urandom` 种子（`+verilator+seed`），固定后结果可复现 |
+| `TPL_MASK` | 全开（0x3FF） | 可选模板位掩码（bit i = 模板 Ti），如 `64`=仅 T6（c 密集）、`128`=仅 T7（i/v+跳变） |
+| `BENCH_TAG` | bench | 结果行标签（收集多场景时区分） |
+| `MEAS_SKIP` | 2000 | 测量窗口跳过的预热拍数（复位后第 N 拍起统计到仿真结束） |
+
+```bash
+SEED=1 TPL_MASK=64 BENCH_TAG=t6_c RUN_US=50 WAVE=0 ./run_verilator.sh
+```
+
+仿真结束 stdout 输出一行 `BENCH_CSV tag=... seed=... cyc=... ...`，指标：
+
+- **吞吐**：`koaout`（KOA 出队）/ `cre`/`thdone`（线程创建/完成）/ `iss`（一级发射，
+  分 `iss_iv`/`iss_c`）/ `emiteu`/`emitdma`/`doneeu`/`donedma`（二级发射与 done）；
+- **利用率**：`iss_util`（÷2/拍）、`eu_util`（÷2/拍，EU 桩理论上限 0.5/个）、
+  `dse_util`（÷4/拍，RBA 稳态理论上限 ≈0.88/DSE）；
+- **占用**（时间平均）：`pool_avg`(64)/`buf_avg`(8)/`q0/q1_avg`(8)/`ct_avg`(16)/
+  `fifo_avg`(32)；`rba_min` 为窗口内各 DSE 读写机会最低值；
+- **反压**：`rba_bp_cyc`/`fifo_full_cyc`（累计拍数）；
+- **延迟**：线程创建→T_DONE 直方图（10 拍一桶）的 `lat_avg/lat_p50/lat_p99/lat_max`。
+
+正确性前提：任何场景下 idle=64、UVM_ERROR=0、发射-完成守恒，违反则结果作废。
+
+## Benchmark GUI
+
+```bash
+python bench/gui_server.py      # → 自动打开 http://localhost:8765
+```
+
+本地 Web 界面（Python 标准库后端 + ECharts 前端，无 pip 依赖）：
+
+- **场景输入**三组面板：流量侧（RUN_US/平面数/时隙/通道/串口速率）、线程侧
+  （T0~T9 模板勾选，自动算 TPL_MASK，含"仅 T6/仅 T7"快捷键）、参数侧（种子、
+  预热拍数）；
+- **运行管理**：单场景串行（共享 Verilator 构建目录），实时日志尾部轮询，可终止；
+- **指标输出**：关键指标卡片 + 四张图表——发射资源利用率（带理论上限虚线：
+  一级 1.0 / EU 0.5 / DSE≈0.88）、资源占用（占容量百分比）、线程生命周期延迟
+  （对数轴 avg/p50/p99/max）、吞吐构成（i/v 与 c 每拍堆叠）；
+- **历史结果表**：勾选任意多条 → 图表联动对比；校验列显示 通过/异常
+  （UVM_ERROR=0 且 idle=64）。
+
+结果持久化在 `bench/results.json`，运行日志在 `bench/logs/`。图表依赖 ECharts CDN，
+离线时图表区显示占位提示（表格与卡片不受影响）。
+
 ## 目录结构
 
 ```text
@@ -104,6 +153,7 @@ uvm_poe/
 │  └─ poe_rba.sv          # 4 个读写机会计数（64，70~75 拍归还）
 ├─ tb/                    # koa_if.sv、tb_top.sv
 ├─ uvm/                   # ko_pkg / item / seq / agent / scoreboard / tests
+├─ bench/                 # benchmark GUI（gui_server.py + gui.html + results.json）
 ├─ sim/                   # filelist.f、run_verilator.sh
 └─ tools/                 # 复用已打补丁的 uvm-core + Verilator 链接修复
 ```

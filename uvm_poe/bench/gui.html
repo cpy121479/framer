@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>POE Benchmark</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --line:#e3e6ea; --txt:#2b2f36; --sub:#8a919c;
+          --acc:#2f6fed; --ok:#1a9e5c; --bad:#d64541; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.6 "Segoe UI","Microsoft YaHei",sans-serif;
+         background:var(--bg); color:var(--txt); }
+  .wrap { display:flex; min-height:100vh; }
+  /* ---- 左侧配置面板 ---- */
+  .side { width:330px; flex:none; background:var(--card); border-right:1px solid var(--line);
+          padding:16px; overflow-y:auto; }
+  .side h1 { font-size:17px; margin:0 0 4px; }
+  .side .sub { color:var(--sub); font-size:12px; margin-bottom:14px; }
+  .grp { border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:12px; }
+  .grp h2 { font-size:13px; margin:0 0 8px; color:var(--acc); font-weight:600; }
+  label.f { display:flex; justify-content:space-between; align-items:center; margin:5px 0; font-size:13px; }
+  label.f span.hint { color:var(--sub); font-size:11px; margin-left:6px; }
+  input[type=text], input[type=number] { width:120px; padding:4px 6px; border:1px solid var(--line);
+    border-radius:5px; font:inherit; }
+  .tpls { display:grid; grid-template-columns:1fr 1fr; gap:3px 8px; font-size:12px; }
+  .tpls label { display:flex; gap:4px; align-items:center; cursor:pointer; }
+  .tpls input { accent-color:var(--acc); }
+  .btnrow { display:flex; gap:6px; margin-top:6px; }
+  button { padding:6px 14px; border:1px solid var(--line); border-radius:6px; background:#fff;
+           cursor:pointer; font:inherit; }
+  button.primary { background:var(--acc); color:#fff; border-color:var(--acc); width:100%;
+                   padding:9px; font-weight:600; }
+  button.danger { color:var(--bad); border-color:var(--bad); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  #maskval { font-size:11px; color:var(--sub); margin-top:4px; }
+  /* ---- 右侧结果区 ---- */
+  .main { flex:1; padding:16px 20px; overflow-y:auto; }
+  .cards { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px;
+          padding:10px 16px; min-width:120px; }
+  .card .v { font-size:22px; font-weight:700; }
+  .card .k { font-size:12px; color:var(--sub); }
+  .card .u { font-size:11px; color:var(--sub); }
+  .charts { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .chart { background:var(--card); border:1px solid var(--line); border-radius:8px;
+           padding:8px; height:320px; }
+  .chart .inner { width:100%; height:100%; }
+  table { border-collapse:collapse; width:100%; background:var(--card); font-size:12.5px; }
+  th, td { border-bottom:1px solid var(--line); padding:5px 8px; text-align:right; }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align:left; }
+  thead th { color:var(--sub); font-weight:600; position:sticky; top:0; background:var(--card); }
+  .badge { display:inline-block; padding:1px 8px; border-radius:9px; font-size:11px; }
+  .badge.ok { background:#e4f5ec; color:var(--ok); }
+  .badge.bad { background:#fbe9e8; color:var(--bad); }
+  #logtail { background:#1e222a; color:#cdd3dc; font:11.5px/1.5 Consolas,monospace;
+             padding:10px; border-radius:8px; max-height:160px; overflow-y:auto;
+             white-space:pre; display:none; margin-bottom:14px; }
+  #status { font-size:13px; margin:10px 0; color:var(--sub); }
+  .sec { background:var(--card); border:1px solid var(--line); border-radius:8px;
+         padding:10px 12px; margin-bottom:14px; }
+  .sec h3 { margin:2px 0 8px; font-size:14px; }
+  .spin { display:inline-block; width:12px; height:12px; border:2px solid var(--acc);
+          border-top-color:transparent; border-radius:50%; animation:r 0.8s linear infinite;
+          vertical-align:-2px; margin-right:6px; }
+  @keyframes r { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <!-- ============ 场景输入 ============ -->
+  <div class="side">
+    <h1>POE Benchmark</h1>
+    <div class="sub">KOA → THM → 两级发射 → EU/DSE/RBA 行为模型</div>
+
+    <div class="grp">
+      <h2>基本信息</h2>
+      <label class="f">场景标签 <input type="text" id="tag" value="bench"></label>
+      <label class="f">随机种子 <span class="hint">空=随机</span><input type="text" id="seed" placeholder="如 1"></label>
+    </div>
+
+    <div class="grp">
+      <h2>流量侧（KOA 激励）</h2>
+      <label class="f">RUN_US（µs 窗口）<input type="number" id="RUN_US" value="50"></label>
+      <label class="f">fgOTN 平面数 <input type="number" id="N_OH_PLANES" value="4"></label>
+      <label class="f">每平面时隙 <input type="number" id="OH_SLOTS" value="9520"></label>
+      <label class="f">X2X 平面数 <input type="number" id="N_X2X_PLANES" value="8"></label>
+      <label class="f">X2X 每平面时隙 <input type="number" id="X2X_SLOTS" value="9520"></label>
+      <label class="f">最大通道数 <input type="number" id="N_CH" value="8"></label>
+      <label class="f">串口速率 Mpps <input type="number" id="UART_MPPS" value="60"></label>
+    </div>
+
+    <div class="grp">
+      <h2>线程侧（模板池）</h2>
+      <div class="tpls" id="tpls"></div>
+      <div class="btnrow">
+        <button onclick="tplAll(true)">全选</button>
+        <button onclick="tplAll(false)">清空</button>
+        <button onclick="tplPreset(64)">仅T6</button>
+        <button onclick="tplPreset(128)">仅T7</button>
+      </div>
+      <div id="maskval"></div>
+    </div>
+
+    <div class="grp">
+      <h2>参数侧（测量）</h2>
+      <label class="f">MEAS_SKIP（预热拍）<input type="number" id="meas_skip" value="2000"></label>
+    </div>
+
+    <button class="primary" id="runbtn" onclick="runSim()">运行场景</button>
+    <button class="danger" id="cancelbtn" style="width:100%;margin-top:8px;display:none"
+            onclick="cancelSim()">终止运行</button>
+    <div id="status"></div>
+  </div>
+
+  <!-- ============ 指标输出 ============ -->
+  <div class="main">
+    <pre id="logtail"></pre>
+    <div class="cards" id="cards"></div>
+    <div class="charts">
+      <div class="chart"><div class="inner" id="ch_util"></div></div>
+      <div class="chart"><div class="inner" id="ch_occ"></div></div>
+      <div class="chart"><div class="inner" id="ch_lat" style="height:100%"></div></div>
+      <div class="chart"><div class="inner" id="ch_tp"></div></div>
+    </div>
+    <div class="sec" style="margin-top:14px">
+      <h3>历史结果（勾选后图表联动对比）</h3>
+      <table id="tbl"><thead><tr>
+        <th></th><th>时间</th><th>标签</th><th>种子</th><th>模板掩码</th><th>窗口拍</th>
+        <th>线程完成</th><th>iss_util</th><th>eu_util</th><th>dse_util</th>
+        <th>p50</th><th>p99</th><th>lat_max</th><th>校验</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------------- 模板定义（与 poe_thread_tpl.sv T0..T9 对应） ----------------
+const TPLS = [
+  ["T0","短 i/v（2ts 纯计算）"], ["T1","混合（4ts，1对loc/free）"],
+  ["T2","长线程+跳变（8ts）"],   ["T3","DMA 密集（6ts，3对）"],
+  ["T4","单段持锁（5ts）"],      ["T5","双段持锁（7ts）"],
+  ["T6","c 密集（16ts×8 高压）"],["T7","i/v 密集+跳变（16ts×8）"],
+  ["T8","混合（16ts×8，4iv+4c）"],["T9","空 c_task（4ts）"],
+];
+const CAP = { iss:1.0, eu:0.5, dse:0.88 };          // 利用率理论上限
+const OCC_CAP = [["pool_avg",64],["buf_avg",8],["q0_avg",8],["q1_avg",8],
+                 ["ct_avg",16],["fifo_avg",32]];    // 占用容量
+
+let results = [], lastCount = -1, pollTimer = null;
+const charts = {};
+
+// ---------------- 模板复选框 ----------------
+function buildTpls() {
+  const box = document.getElementById("tpls");
+  TPLS.forEach(([n,d],i) => {
+    const lb = document.createElement("label");
+    lb.title = d;
+    lb.innerHTML = `<input type="checkbox" data-i="${i}" checked onchange="maskCalc()">` +
+                   `<span><b>${n}</b><br><span style="color:var(--sub);font-size:10px">${d}</span></span>`;
+    box.appendChild(lb);
+  });
+  maskCalc();
+}
+function maskCalc() {
+  let m = 0;
+  document.querySelectorAll("#tpls input").forEach(c => {
+    if (c.checked) m |= 1 << (+c.dataset.i);
+  });
+  document.getElementById("maskval").textContent = "TPL_MASK = " + m + "（0x" + m.toString(16) + "）";
+  return m;
+}
+function tplAll(v) {
+  document.querySelectorAll("#tpls input").forEach(c => c.checked = v);
+  maskCalc();
+}
+function tplPreset(m) {
+  document.querySelectorAll("#tpls input").forEach(c =>
+    c.checked = !!((m >> (+c.dataset.i)) & 1));
+  maskCalc();
+}
+
+// ---------------- 运行控制 ----------------
+async function runSim() {
+  const cfg = { tag: document.getElementById("tag").value.trim() || "bench",
+                seed: document.getElementById("seed").value.trim(),
+                meas_skip: document.getElementById("meas_skip").value,
+                tpl_mask: maskCalc() };
+  ["RUN_US","N_OH_PLANES","OH_SLOTS","N_X2X_PLANES","X2X_SLOTS","N_CH","UART_MPPS"]
+    .forEach(k => cfg[k] = document.getElementById(k).value);
+  if (cfg.tpl_mask === 0) { alert("至少选择一个模板"); return; }
+  const r = await fetch("/api/run", { method:"POST",
+    headers:{"Content-Type":"application/json"}, body: JSON.stringify(cfg) });
+  const j = await r.json();
+  if (!j.ok) { alert(j.msg); return; }
+  document.getElementById("logtail").style.display = "block";
+  setStatus('<span class="spin"></span>运行中：' + cfg.tag + " …");
+  document.getElementById("runbtn").disabled = true;
+  document.getElementById("cancelbtn").style.display = "block";
+  pollTimer = setInterval(poll, 2000);
+}
+async function cancelSim() {
+  await fetch("/api/cancel", { method:"POST" });
+}
+async function poll() {
+  const j = await (await fetch("/api/status")).json();
+  const lt = document.getElementById("logtail");
+  lt.textContent = (j.tail || []).join("\n");
+  lt.scrollTop = lt.scrollHeight;
+  if (!j.running) {
+    clearInterval(pollTimer); pollTimer = null;
+    document.getElementById("runbtn").disabled = false;
+    document.getElementById("cancelbtn").style.display = "none";
+    setStatus("空闲");
+    await refresh();
+    if (results.length) render(results[results.length - 1].id);
+  } else if (j.elapsed != null) {
+    setStatus('<span class="spin"></span>运行中：' + (j.tag||"") +
+              "（" + Math.round(j.elapsed) + "s）");
+  }
+}
+function setStatus(html) { document.getElementById("status").innerHTML = html; }
+
+// ---------------- 结果表 / 详情 / 图表 ----------------
+async function refresh() {
+  const j = await (await fetch("/api/results")).json();
+  results = j.runs || [];
+  if (results.length === lastCount) { renderTbl(); return; }
+  lastCount = results.length;
+  renderTbl();
+}
+function renderTbl() {
+  const tb = document.querySelector("#tbl tbody");
+  tb.innerHTML = "";
+  results.slice().reverse().forEach(r => {
+    const m = r.metrics || {};
+    const num = k => (m[k] !== undefined ? +m[k] : null);
+    const tr = document.createElement("tr");
+    const checked = selected().includes(r.id) ? "checked" : "";
+    const mask = r.cfg && r.cfg.TPL_MASK ? r.cfg.TPL_MASK : "全";
+    const badge = r.checks && r.checks.ok
+      ? '<span class="badge ok">通过</span>'
+      : '<span class="badge bad">异常</span>';
+    const f = (v, d=3) => v==null ? "-" : v.toFixed(d);
+    tr.innerHTML =
+      `<td><input type="checkbox" ${checked} onchange="renderAll()" data-id="${r.id}"></td>` +
+      `<td>${r.ts}</td><td><b>${m.tag||r.id}</b></td><td>${m.seed??"-"}</td><td>${mask}</td>` +
+      `<td>${num("cyc")??"-"}</td><td>${num("thdone")??"-"}</td>` +
+      `<td>${f(num("iss_util"))}</td><td>${f(num("eu_util"))}</td><td>${f(num("dse_util"))}</td>` +
+      `<td>${num("lat_p50")??"-"}</td><td>${num("lat_p99")??"-"}</td><td>${num("lat_max")??"-"}</td>` +
+      `<td>${badge}</td>`;
+    tb.appendChild(tr);
+  });
+}
+function selected() {
+  return [...document.querySelectorAll("#tbl input:checked")].map(c => c.dataset.id);
+}
+function runById(id) { return results.find(r => r.id === id); }
+
+function renderAll() {
+  const ids = selected();
+  renderTbl();
+  if (!ids.length) return;
+  drawUtil(ids); drawOcc(ids); drawLat(ids); drawTp(ids); drawCards(ids);
+}
+
+function render(id) {           // 单场景详情：自动只勾选该场景
+  document.querySelectorAll("#tbl input").forEach(c =>
+    c.checked = c.dataset.id === id);
+  renderAll();
+}
+
+function mkChart(id) {
+  if (!window.echarts) return null;
+  if (!charts[id]) charts[id] = echarts.init(document.getElementById(id));
+  return charts[id];
+}
+function barSeries(ids, key, name) {
+  return { name, type:"bar", data: ids.map(i => {
+    const m = (runById(i)||{}).metrics || {};
+    return m[key] !== undefined ? +m[key] : null;
+  })};
+}
+function runNames(ids) { return ids.map(i => (runById(i)||{}).metrics?.tag || i); }
+
+function drawCards(ids) {
+  const m = (runById(ids[0])||{}).metrics || {};
+  const box = document.getElementById("cards");
+  const items = [
+    ["线程完成", m.thdone, "个"], ["KOA 输出", m.koaout, "条"],
+    ["一级发射", m.iss, "burst", "util " + m.iss_util],
+    ["EU 发射", m.emiteu, "burst", "util " + m.eu_util],
+    ["DSE 发射", m.emitdma, "task", "util " + m.dse_util],
+    ["延迟 p50", m.lat_p50, "拍"], ["延迟 p99", m.lat_p99, "拍"],
+    ["RBA 反压", m.rba_bp_cyc ?? 0, "拍"],
+  ];
+  box.innerHTML = items.map(([k,v,u,sub]) =>
+    `<div class="card"><div class="v">${v ?? "-"}</div>` +
+    `<div class="k">${k} <span class="u">${u||""}</span>` +
+    (sub?`<div class="u">${sub}</div>`:"") + `</div></div>`).join("");
+}
+
+function drawUtil(ids) {
+  const c = mkChart("ch_util"); if (!c) return noEcharts("ch_util");
+  c.setOption({
+    title:{text:"发射资源利用率（vs 理论上限）",left:8,top:4,textStyle:{fontSize:13}},
+    tooltip:{}, legend:{top:4,right:8},
+    grid:{left:44,right:14,top:44,bottom:26},
+    xAxis:{type:"category",data:["一级发射 ÷2/拍","EU ÷2/拍","DSE ÷4/拍"]},
+    yAxis:{max:1.0},
+    series:[ barSeries(ids,"iss_util","iss_util"),
+             barSeries(ids,"eu_util","eu_util"),
+             barSeries(ids,"dse_util","dse_util"),
+             { name:"理论上限", type:"line", data:[CAP.iss,CAP.eu,CAP.dse],
+               symbol:"none", lineStyle:{type:"dashed",color:"#d64541"} } ]
+  }, true);
+}
+function drawOcc(ids) {
+  const c = mkChart("ch_occ"); if (!c) return noEcharts("ch_occ");
+  const names = OCC_CAP.map(([k]) =>
+    ({pool_avg:"线程池",buf_avg:"保序缓存",q0_avg:"q0",q1_avg:"q1",
+      ct_avg:"c_task缓存",fifo_avg:"dma FIFO"}[k]));
+  c.setOption({
+    title:{text:"资源占用（占容量 %，时间平均）",left:8,top:4,textStyle:{fontSize:13}},
+    tooltip:{formatter:p=>`${p.name}：${(p.value).toFixed(1)}%`}, legend:{top:4,right:8},
+    grid:{left:44,right:14,top:44,bottom:26},
+    xAxis:{type:"category",data:names},
+    yAxis:{max:100,axisLabel:{formatter:"{value}%"}},
+    series: OCC_CAP.map(([k,cap]) => ({ name:k, type:"bar",
+      data: ids.map(i => { const m=(runById(i)||{}).metrics||{};
+        return m[k]!==undefined ? +(100*m[k]/cap).toFixed(1) : null; }) }))
+  }, true);
+}
+function drawLat(ids) {
+  const c = mkChart("ch_lat"); if (!c) return noEcharts("ch_lat");
+  c.setOption({
+    title:{text:"线程生命周期延迟（拍，对数轴）",left:8,top:4,textStyle:{fontSize:13}},
+    tooltip:{}, legend:{top:4,right:8},
+    grid:{left:54,right:14,top:44,bottom:26},
+    xAxis:{type:"category",data:runNames(ids)},
+    yAxis:{type:"log"},
+    series:[ barSeries(ids,"lat_avg","avg"), barSeries(ids,"lat_p50","p50"),
+             barSeries(ids,"lat_p99","p99"), barSeries(ids,"lat_max","max") ]
+  }, true);
+}
+function drawTp(ids) {
+  const c = mkChart("ch_tp"); if (!c) return noEcharts("ch_tp");
+  c.setOption({
+    title:{text:"吞吐构成（每拍发射数，堆叠）",left:8,top:4,textStyle:{fontSize:13}},
+    tooltip:{}, legend:{top:4,right:8},
+    grid:{left:44,right:14,top:44,bottom:26},
+    xAxis:{type:"category",data:runNames(ids)},
+    yAxis:{name:"/拍"},
+    series:[ Object.assign(barSeries(ids,"iss_iv","i/v 发射"),{stack:"t"}),
+             Object.assign(barSeries(ids,"iss_c","c 发射"),{stack:"t"}) ],
+  }, true);
+}
+function noEcharts(id) {
+  document.getElementById(id).innerHTML =
+    '<div style="padding:40px;color:#8a919c;text-align:center">图表库（ECharts CDN）加载失败，指标请看下方表格</div>';
+}
+
+// ---------------- 启动 ----------------
+buildTpls();
+refresh().then(() => {
+  if (results.length) render(results[results.length - 1].id);
+  else setStatus("空闲（尚无历史结果，配置左侧场景后运行）");
+});
+setInterval(refresh, 10000);   // 兜底刷新
+</script>
+</body>
+</html>

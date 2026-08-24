@@ -342,6 +342,173 @@ module tb_top;
     end
 
 
+    // ================= benchmark 仪器化 =================
+    // 测量窗口：复位后第 MEAS_SKIP 拍起统计到仿真结束（跳过预热；drain 段计入，
+    // 同 RUN_US 对比时口径一致）。指标：
+    // - 吞吐：koa_out / 线程创建/完成 / 一级发射（i/v、c 分类）/ EU、DSE 发射与 done
+    // - 利用率：一级发射槽（÷2/拍）、EU（÷2/拍）、DSE（÷4/拍）
+    // - 占用（时间平均）：线程池(64)/保序缓存(8)/q0/q1(8)/ct(16)/dma FIFO(4×8)
+    // - 延迟：线程创建 → T_DONE 直方图（10 拍一桶），输出 avg/p50/p99/max
+    string bench_tag;
+    int bench_seed;
+    int meas_skip;
+    longint cyc_cnt;
+    longint meas_cyc;
+    longint n_cre, n_thdone, n_koa_out;
+    longint n_iss, n_iss_iv, n_iss_c;
+    longint n_emit_eu, n_emit_dma, n_done_eu, n_done_dma;
+    longint acc_pool, acc_buf, acc_q0, acc_q1, acc_ct, acc_fifo, acc_iss, acc_eu, acc_dse;
+    longint rba_min [4];
+    localparam int LAT_BW = 10; // 每桶 10 拍
+    localparam int NLAT = 2048; // 覆盖 0..20479 拍
+    longint lat_hist [NLAT+1]; // 末桶 = 溢出
+    longint lat_n, lat_sum, lat_min, lat_max;
+    logic [1:0] prev_state [64];
+    longint cre_time [64];
+
+    initial begin
+        bench_tag = "bench";
+        void'($value$plusargs("BENCH_TAG=%s", bench_tag));
+        bench_seed = -1;
+        void'($value$plusargs("BENCH_SEED=%d", bench_seed));
+        meas_skip = 2000;
+        void'($value$plusargs("MEAS_SKIP=%d", meas_skip));
+    end
+
+    always @(posedge clk) begin
+        integer pool_occ, q0o, q1o, cto, fifo_o;
+        longint lat;
+        if (!rst_n) begin
+            cyc_cnt = 0;
+            meas_cyc = 0;
+            n_cre = 0; n_thdone = 0; n_koa_out = 0;
+            n_iss = 0; n_iss_iv = 0; n_iss_c = 0;
+            n_emit_eu = 0; n_emit_dma = 0; n_done_eu = 0; n_done_dma = 0;
+            acc_pool = 0; acc_buf = 0; acc_q0 = 0; acc_q1 = 0; acc_ct = 0;
+            acc_fifo = 0; acc_iss = 0; acc_eu = 0; acc_dse = 0;
+            for (int d = 0; d < 4; d++) rba_min[d] = 64;
+            for (int b = 0; b <= NLAT; b++) lat_hist[b] = 0;
+            lat_n = 0; lat_sum = 0; lat_min = '1; lat_max = 0;
+            for (int i = 0; i < 64; i++) begin
+                prev_state[i] = 2'd0;
+                cre_time[i] = 0;
+            end
+        end else begin
+            cyc_cnt = cyc_cnt + 1;
+            // 线程状态沿检测（创建 / 完成，均比 THM 内部晚 1 拍采样，误差相消）
+            for (int i = 0; i < 64; i++) begin
+                if (prev_state[i] == 2'd0 && u_thm.th_state[i] == 2'd1) begin
+                    cre_time[i] = cyc_cnt;
+                    if (cyc_cnt >= meas_skip) n_cre++;
+                end
+                if (prev_state[i] != 2'd3 && u_thm.th_state[i] == 2'd3) begin
+                    if (cyc_cnt >= meas_skip) begin
+                        n_thdone++;
+                        lat = cyc_cnt - cre_time[i];
+                        lat_n++;
+                        lat_sum += lat;
+                        if (lat < lat_min) lat_min = lat;
+                        if (lat > lat_max) lat_max = lat;
+                        if (lat / LAT_BW <= NLAT) lat_hist[lat / LAT_BW]++;
+                        else lat_hist[NLAT]++;
+                    end
+                end
+                prev_state[i] = u_thm.th_state[i];
+            end
+            if (cyc_cnt >= meas_skip) begin
+                meas_cyc++;
+                // 吞吐
+                if (u_if.out_vld) n_koa_out++;
+                if (iss_vld0) begin
+                    n_iss++;
+                    if (ready_burst[iss_tid0*BURST_W + 25]) n_iss_c++;
+                    else n_iss_iv++;
+                end
+                if (iss_vld1) begin
+                    n_iss++;
+                    if (ready_burst[iss_tid1*BURST_W + 25]) n_iss_c++;
+                    else n_iss_iv++;
+                end
+                n_emit_eu += emit_eu_vld0 + emit_eu_vld1;
+                n_done_eu += eu_done_vld0 + eu_done_vld1;
+                for (int d = 0; d < 4; d++) begin
+                    if (emit_dma_vld[d]) n_emit_dma++;
+                    if (dma_done_vld[d]) n_done_dma++;
+                end
+                // 占用累计（时间平均用）
+                pool_occ = 0;
+                for (int i = 0; i < 64; i++)
+                    if (u_thm.th_state[i] != 2'd0) pool_occ++;
+                acc_pool += pool_occ;
+                acc_buf += u_thm.buf_cnt;
+                q0o = 0; q1o = 0; cto = 0;
+                for (int i = 0; i < 8; i++) begin
+                    if (q0_vld[i]) q0o++;
+                    if (q1_vld[i]) q1o++;
+                end
+                for (int i = 0; i < 16; i++)
+                    if (ct_vld[i]) cto++;
+                acc_q0 += q0o; acc_q1 += q1o; acc_ct += cto;
+                fifo_o = 0;
+                for (int d = 0; d < 4; d++) begin
+                    fifo_o += u_dma.f_cnt[d];
+                    if (rba_cnt[d*7 +: 7] < rba_min[d])
+                        rba_min[d] = rba_cnt[d*7 +: 7];
+                end
+                acc_fifo += fifo_o;
+                acc_iss += iss_vld0 + iss_vld1;
+                acc_eu += emit_eu_vld0 + emit_eu_vld1;
+                for (int d = 0; d < 4; d++)
+                    if (emit_dma_vld[d]) acc_dse++;
+            end
+        end
+    end
+
+    // benchmark 结果：stdout 一行 key=value（BENCH_CSV 前缀，便于收集）+ 日志文件
+    final begin
+        automatic real iss_util = (meas_cyc > 0) ? 1.0 * acc_iss / (2.0 * meas_cyc) : 0.0;
+        automatic real eu_util = (meas_cyc > 0) ? 1.0 * acc_eu / (2.0 * meas_cyc) : 0.0;
+        automatic real dse_util = (meas_cyc > 0) ? 1.0 * acc_dse / (4.0 * meas_cyc) : 0.0;
+        automatic longint cum = 0;
+        automatic longint tgt;
+        automatic int p50 = -1;
+        automatic int p99 = -1;
+        automatic longint rba_bp_sum = 0;
+        automatic longint ff_sum = 0;
+        for (int d = 0; d < 4; d++) begin
+            rba_bp_sum += rba_bp_cyc[d];
+            ff_sum += fifo_full_cyc[d];
+        end
+        if (lat_n > 0) begin
+            tgt = (lat_n * 50) / 100;
+            for (int b = 0; b <= NLAT; b++) begin
+                cum += lat_hist[b];
+                if (cum >= tgt) begin p50 = b * LAT_BW; break; end
+            end
+            cum = 0;
+            tgt = (lat_n * 99) / 100;
+            for (int b = 0; b <= NLAT; b++) begin
+                cum += lat_hist[b];
+                if (cum >= tgt) begin p99 = b * LAT_BW; break; end
+            end
+        end
+        $display("BENCH_CSV tag=%0s seed=%0d cyc=%0d cre=%0d thdone=%0d koaout=%0d iss=%0d iss_iv=%0d iss_c=%0d emiteu=%0d emitdma=%0d doneeu=%0d donedma=%0d iss_util=%.3f eu_util=%.3f dse_util=%.3f pool_avg=%.2f buf_avg=%.2f q0_avg=%.2f q1_avg=%.2f ct_avg=%.2f fifo_avg=%.2f rba_min=%0d/%0d/%0d/%0d rba_bp_cyc=%0d fifo_full_cyc=%0d lat_avg=%.1f lat_p50=%0d lat_p99=%0d lat_max=%0d lat_n=%0d",
+                 bench_tag, bench_seed, meas_cyc, n_cre, n_thdone, n_koa_out,
+                 n_iss, n_iss_iv, n_iss_c, n_emit_eu, n_emit_dma, n_done_eu, n_done_dma,
+                 iss_util, eu_util, dse_util,
+                 (meas_cyc > 0) ? 1.0 * acc_pool / meas_cyc : 0.0,
+                 (meas_cyc > 0) ? 1.0 * acc_buf / meas_cyc : 0.0,
+                 (meas_cyc > 0) ? 1.0 * acc_q0 / meas_cyc : 0.0,
+                 (meas_cyc > 0) ? 1.0 * acc_q1 / meas_cyc : 0.0,
+                 (meas_cyc > 0) ? 1.0 * acc_ct / meas_cyc : 0.0,
+                 (meas_cyc > 0) ? 1.0 * acc_fifo / meas_cyc : 0.0,
+                 rba_min[0], rba_min[1], rba_min[2], rba_min[3],
+                 rba_bp_sum, ff_sum,
+                 (lat_n > 0) ? 1.0 * lat_sum / lat_n : 0.0,
+                 p50, p99, lat_max, lat_n);
+        $fdisplay(thm_logf, "BENCH lat_hist(10beat桶): min=%0d max=%0d", lat_min, lat_max);
+    end
+
     // 预读入口激励：每拍随机 0..4 组预读（每组约 1/16 概率，模拟业务流预读请求）
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -395,6 +562,9 @@ module tb_top;
             else n_done++;
         end
         // 校验：所有线程应回到 IDLE（C 窗为纯数据存储，无 loc/free 占用状态）
+        // （$display 同步打 stdout：benchmark 解析器从运行日志取校验结果）
+        $display("FINAL idle=%0d ready=%0d issued=%0d done=%0d",
+                 idle, n_ready, n_issued, n_done);
         $fdisplay(thm_logf, "FINAL idle=%0d ready=%0d issued=%0d done=%0d",
                   idle, n_ready, n_issued, n_done);
         $fdisplay(thm_logf, "BP RBA_cyc=%0d/%0d/%0d/%0d FIFO_full_cyc=%0d/%0d/%0d/%0d",

@@ -17,6 +17,12 @@ N_CH=${N_CH:-8}
 UART_MPPS=${UART_MPPS:-60}
 WAVE_FILE=${WAVE_FILE:-wave.vcd}
 WAVE=${WAVE:-0}
+# benchmark 场景参数：SEED（$urandom 种子）/ TPL_MASK（可选模板位掩码，bit i=Ti）/
+# BENCH_TAG（结果行标签）/ MEAS_SKIP（测量窗口跳过的预热拍数）
+SEED=${SEED:-}
+TPL_MASK=${TPL_MASK:-}
+BENCH_TAG=${BENCH_TAG:-bench}
+MEAS_SKIP=${MEAS_SKIP:-2000}
 
 TOOLS=../tools
 UVM_CORE=$TOOLS/uvm-core-main
@@ -44,10 +50,17 @@ verilator --timing --binary -O1 --build-jobs 4 $TRACE \
   $TOOLS/verilator_link_fixes.cpp \
   -f filelist.f -o simv
 
+SEED_ARG=""
+if [ -n "$SEED" ]; then SEED_ARG="+verilator+seed+$SEED +BENCH_SEED=$SEED"; fi
+TPL_ARG=""
+if [ -n "$TPL_MASK" ]; then TPL_ARG="+TPL_MASK=$TPL_MASK"; fi
+
 echo "=================================================="
 echo "运行：$TESTNAME  RUN_US=$RUN_US  OH=$N_OH_PLANES x$OH_SLOTS  X2X=$N_X2X_PLANES x$X2X_SLOTS  UART=$UART_MPPS"
+echo "      SEED=${SEED:-默认}  TPL_MASK=${TPL_MASK:-全开}  TAG=$BENCH_TAG  MEAS_SKIP=$MEAS_SKIP"
 echo "=================================================="
 ./$M_DIR/simv +UVM_TESTNAME=$TESTNAME +RUN_US=$RUN_US \
   +N_OH_PLANES=$N_OH_PLANES +OH_SLOTS=$OH_SLOTS +OH_PLANE_SKEW=$OH_PLANE_SKEW \
   +N_X2X_PLANES=$N_X2X_PLANES +X2X_SLOTS=$X2X_SLOTS +X2X_PLANE_SKEW=$X2X_PLANE_SKEW \
-  +N_CH=$N_CH +UART_MPPS=$UART_MPPS +WAVE_FILE=$WAVE_FILE
+  +N_CH=$N_CH +UART_MPPS=$UART_MPPS +WAVE_FILE=$WAVE_FILE \
+  +BENCH_TAG=$BENCH_TAG +MEAS_SKIP=$MEAS_SKIP $SEED_ARG $TPL_ARG

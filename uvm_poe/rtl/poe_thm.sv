@@ -106,6 +106,27 @@ module poe_thm #(
     localparam logic [5:0] LOCK_FREE = 6'd63;
     logic [5:0] lock_owner [N_LOCK]; // 持锁线程 tid；LOCK_FREE=空闲
 
+    // ---- benchmark 场景控制：TPL_MASK（plusarg，默认全开）限定可选模板集合，
+    // 建线程时从掩码内均匀随机选取（bit i 对应模板 Ti；掩码为 0 时回退全开） ----
+    int tpl_mask;
+    initial begin
+        tpl_mask = (1 << N_TPL) - 1;
+        void'($value$plusargs("TPL_MASK=%d", tpl_mask));
+        if ((tpl_mask & ((1 << N_TPL) - 1)) == 0)
+            tpl_mask = (1 << N_TPL) - 1;
+    end
+
+    function automatic int tpl_pick();
+        automatic int m = tpl_mask & ((1 << N_TPL) - 1);
+        automatic int r = $urandom % $countones(m);
+        for (int b = 0; b < N_TPL; b++)
+            if ((m >> b) & 1) begin
+                if (r == 0) return b;
+                r--;
+            end
+        return 0;
+    endfunction
+
     // ---- 8 深保序缓存（只存有效信息：预读 + 保序键；线程描述由模板池随机） ----
     localparam int ST_W = 3;
     localparam int TS_W = $clog2(MAX_TS + 1); // ts 数位宽（16 → 4bit）
@@ -393,8 +414,8 @@ module poe_thm #(
                 end
                 if (t >= 0 && (from_buf || (ko_vld && ko_rdy &&
                 !key_active(ko_stream, ko_cid, ko_pos)))) begin
-                    // 线程描述：从模板池随机选取（锁字段随 burst 模板携带）
-                    tpl = tpl_get($urandom % N_TPL);
+                    // 线程描述：从模板池随机选取（TPL_MASK 限定集合，锁字段随 burst 模板携带）
+                    tpl = tpl_get(tpl_pick());
                     ts = tpl.ts_cnt;
                     bs = tpl.ts_bs;
                     tid_vec = tpl.ts_id;
