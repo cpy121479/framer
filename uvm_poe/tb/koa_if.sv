@@ -40,8 +40,10 @@ interface koa_if #(parameter int NUM_OH_PLANES = 4,
     logic u_i_vld;
     logic [2:0] u_i_pri;
     logic u_i_rdy;
-    // ---- KO 输出 ----
+    // ---- KO 输出（出口 valid/ready 握手：out_vld 保持至 ko_rdy）----
     logic out_vld;
+    logic out_new; // 本拍实际出队（装载拍指示，monitor 采样对齐 rr 时序）
+    logic ko_rdy; // THM 入口 ready（反压，tb_top 由 THM 驱动）
     logic [2:0] out_pri;
     logic [2:0] out_src; // 优先级组号 0..7
     logic [2:0] out_stream; // 来源流 0..6
@@ -65,7 +67,7 @@ interface koa_if #(parameter int NUM_OH_PLANES = 4,
         u_e_vld, u_e_pri,
         u_i_vld, u_i_pri;
         input oh_e_rdy, oh_i_rdy, aps_e_rdy, aps_i_rdy, alm_rdy, u_e_rdy, u_i_rdy,
-        out_vld, out_pri, out_src, out_stream, out_cid, out_pos,
+        out_vld, out_new, out_pri, out_src, out_stream, out_cid, out_pos,
         out_pre_vld, out_dma_addr, out_pre_op;
     endclocking
 
@@ -79,7 +81,7 @@ interface koa_if #(parameter int NUM_OH_PLANES = 4,
         alm_vld, alm_pri, alm_rdy, alm_cid, alm_pos,
         u_e_vld, u_e_pri, u_e_rdy,
         u_i_vld, u_i_pri, u_i_rdy,
-        out_vld, out_pri, out_src, out_stream, out_cid, out_pos,
+        out_vld, out_new, out_pri, out_src, out_stream, out_cid, out_pos,
         out_pre_vld, out_dma_addr, out_pre_op;
     endclocking
 endinterface

@@ -8,10 +8,11 @@
 //     ALM_SBUF      <- ALM
 //     UART_EXT_SBUF <- UART_EXT
 //     UART_INS_SBUF <- UART_INS
-// - 写入（同段合并向量写）：业务源 vld 直写对应段，不做跨流仲裁；
+// - 写入（同段合并向量写）：业务源 vld 直写对应段，不做跨流仲裁、不反压输入流；
 //   同段同拍可合并写多条（MAX_WR_SEG 上限），写入顺序固定为
 //   APS 类（编小优先）→ OH 类（编小优先）→ UART，保持"APS 固定靠前"；
-//   段剩余空间不足时，排在后面的候选让位（rdy=0、vld 保持，不丢报文）。
+//   段满时触发**溢出清空**：丢弃该段全部已缓存报文（含本拍已收的同段候选）、
+//   从空段继续接收，并上报告警（ovf_vld/ovf_seg/ovf_sbuf/ovf_pri）。
 //   每段每拍实际写入条数 = wr_cnt[s][g]，tail 按条数推进，cnt 按条数累加。
 // - 读（每拍 1 条）：先按优先级高低选组（SP，组号 0..7），组内对 5 个 SBUF
 //   按 rr_ptr（每拍推进）轮询，取最先非空的队列段出队。
@@ -62,8 +63,10 @@ module koa #(
     input logic u_i_vld,
     input logic [2:0] u_i_pri,
     output logic u_i_rdy,
-    // ---- KO 输出（→ THM，寄存一拍）----
+    // ---- KO 输出（→ THM，寄存一拍；出口 valid/ready 握手）----
     output logic out_vld,
+    output logic out_new, // 本拍弹出一条新 KO 进输出寄存器（= 实际出队拍，供 monitor 对齐 rr 时序）
+    input logic out_rdy, // 下游（THM）入口 ready：0 时保持输出寄存器不出队（反压不丢）
     output logic [2:0] out_pri,
     output logic [2:0] out_src,
     output logic [2:0] out_stream,
@@ -75,7 +78,12 @@ module koa #(
     input logic [3:0] ko_pre_op, // 4×1bit 操作类型
     output logic [3:0] out_pre_vld,
     output logic [79:0] out_dma_addr,
-    output logic [3:0] out_pre_op
+    output logic [3:0] out_pre_op,
+    // ---- SBUF 段溢出告警（段满触发清空：丢弃段内全部报文，输入流不反压）----
+    output logic ovf_vld, // 清空告警（1 拍脉冲）
+    output logic [N_SBUF*8-1:0] ovf_seg, // 本拍清空的段位图（5 SBUF × 8 段）
+    output logic [2:0] ovf_sbuf, // 首个清空段（观测定位）
+    output logic [2:0] ovf_pri
     );
 
     // SBUF 编号：0=EXT 1=INS 2=ALM 3=UART_EXT 4=UART_INS
@@ -93,11 +101,15 @@ module koa #(
     logic [PTR_W-1:0] sbuf_tail [N_SBUF][8];
     logic [PTR_W:0] sbuf_cnt [N_SBUF][8];
 
-    // ---- 写入接受（组合）：同段同拍可合并写多条（合并向量写）----
-    // 段号 = 报文 pri（0..7，随路传入）；rdy = 对应平面本拍被接受（空间不足时让位）
+    // ---- 写入接受（组合）：同段同拍可合并写多条（合并向量写）。
+    // 段满时**不反压输入流**：触发溢出清空——丢弃该段全部已缓存报文（含本拍
+    // 已收的同段候选），从空段继续接收当前及后续候选，并上报告警（ovf_*）----
     logic [NUM_OH_PLANES-1:0] oh_e_acc, oh_i_acc;
     logic [NUM_X2X_PLANES-1:0] aps_e_acc, aps_i_acc, alm_acc;
     logic u_e_acc, u_i_acc;
+    logic seg_flush [N_SBUF][8]; // 本拍触发清空的段（组合）
+    logic ovf_any;
+    logic [2:0] ovf_sbuf_c, ovf_pri_c;
 
     // 本拍各段待写列表：wr_pkg[s][g][0 .. wr_cnt-1]，写入顺序即"DUT 出队前的段内顺序"
     logic [PKG_W-1:0] wr_pkg [N_SBUF][8][MAX_WR_SEG];
@@ -108,13 +120,18 @@ module koa #(
         automatic logic [WR_CNT_W-1:0] n_acc [N_SBUF][8];
         automatic logic [PKG_W-1:0] tmp [N_SBUF][8][MAX_WR_SEG];
         for (int s = 0; s < N_SBUF; s++)
-            for (int g = 0; g < 8; g++) n_acc[s][g] = '0;
+            for (int g = 0; g < 8; g++) begin
+                n_acc[s][g] = '0;
+                seg_flush[s][g] = 1'b0;
+            end
 
         // APS 类固定靠前：APS_EXT / APS_INS / ALM（同段同 pri 多平面全部可写，编小优先顺序）
         for (int i = 0; i < NUM_X2X_PLANES; i++) begin
             automatic logic [2:0] g = aps_e_pri[i*3 +: 3];
             aps_e_acc[i] = 1'b0;
-            if (aps_e_vld[i] && (sbuf_cnt[0][g] + n_acc[0][g] < PRI_Q_DEPTH)) begin
+            if (aps_e_vld[i]) begin
+                if (!seg_flush[0][g] && (sbuf_cnt[0][g] + n_acc[0][g] >= PRI_Q_DEPTH))
+                    begin seg_flush[0][g] = 1'b1; n_acc[0][g] = '0; end
                 tmp[0][g][n_acc[0][g]] = {ko_pre_vld, ko_dma_addr, ko_pre_op,
                                           3'd2, aps_e_cid[i*CID_W +: CID_W],
                                           aps_e_pos[i*POS_W +: POS_W]};
@@ -123,7 +140,9 @@ module koa #(
             end
             g = aps_i_pri[i*3 +: 3];
             aps_i_acc[i] = 1'b0;
-            if (aps_i_vld[i] && (sbuf_cnt[1][g] + n_acc[1][g] < PRI_Q_DEPTH)) begin
+            if (aps_i_vld[i]) begin
+                if (!seg_flush[1][g] && (sbuf_cnt[1][g] + n_acc[1][g] >= PRI_Q_DEPTH))
+                    begin seg_flush[1][g] = 1'b1; n_acc[1][g] = '0; end
                 tmp[1][g][n_acc[1][g]] = {ko_pre_vld, ko_dma_addr, ko_pre_op,
                                           3'd3, aps_i_cid[i*CID_W +: CID_W],
                                           aps_i_pos[i*POS_W +: POS_W]};
@@ -132,7 +151,9 @@ module koa #(
             end
             g = alm_pri[i*3 +: 3];
             alm_acc[i] = 1'b0;
-            if (alm_vld[i] && (sbuf_cnt[2][g] + n_acc[2][g] < PRI_Q_DEPTH)) begin
+            if (alm_vld[i]) begin
+                if (!seg_flush[2][g] && (sbuf_cnt[2][g] + n_acc[2][g] >= PRI_Q_DEPTH))
+                    begin seg_flush[2][g] = 1'b1; n_acc[2][g] = '0; end
                 tmp[2][g][n_acc[2][g]] = {ko_pre_vld, ko_dma_addr, ko_pre_op,
                                           3'd4, alm_cid[i*CID_W +: CID_W],
                                           alm_pos[i*POS_W +: POS_W]};
@@ -144,7 +165,9 @@ module koa #(
         for (int i = 0; i < NUM_OH_PLANES; i++) begin
             automatic logic [2:0] g = oh_e_pri[i*3 +: 3];
             oh_e_acc[i] = 1'b0;
-            if (oh_e_vld[i] && (sbuf_cnt[0][g] + n_acc[0][g] < PRI_Q_DEPTH)) begin
+            if (oh_e_vld[i]) begin
+                if (!seg_flush[0][g] && (sbuf_cnt[0][g] + n_acc[0][g] >= PRI_Q_DEPTH))
+                    begin seg_flush[0][g] = 1'b1; n_acc[0][g] = '0; end
                 tmp[0][g][n_acc[0][g]] = {ko_pre_vld, ko_dma_addr, ko_pre_op,
                                           3'd0, oh_e_cid[i*CID_W +: CID_W],
                                           oh_e_pos[i*POS_W +: POS_W]};
@@ -153,7 +176,9 @@ module koa #(
             end
             g = oh_i_pri[i*3 +: 3];
             oh_i_acc[i] = 1'b0;
-            if (oh_i_vld[i] && (sbuf_cnt[1][g] + n_acc[1][g] < PRI_Q_DEPTH)) begin
+            if (oh_i_vld[i]) begin
+                if (!seg_flush[1][g] && (sbuf_cnt[1][g] + n_acc[1][g] >= PRI_Q_DEPTH))
+                    begin seg_flush[1][g] = 1'b1; n_acc[1][g] = '0; end
                 tmp[1][g][n_acc[1][g]] = {ko_pre_vld, ko_dma_addr, ko_pre_op,
                                           3'd1, oh_i_cid[i*CID_W +: CID_W],
                                           oh_i_pos[i*POS_W +: POS_W]};
@@ -162,18 +187,33 @@ module koa #(
             end
         end
         // UART（每段最多 1 条）
-        u_e_acc = u_e_vld && (sbuf_cnt[3][u_e_pri] < PRI_Q_DEPTH);
-        u_i_acc = u_i_vld && (sbuf_cnt[4][u_i_pri] < PRI_Q_DEPTH);
-        if (u_e_acc) begin
-                tmp[3][u_e_pri][0] = {ko_pre_vld, ko_dma_addr, ko_pre_op,
+        u_e_acc = 1'b0;
+        if (u_e_vld) begin
+            if (!seg_flush[3][u_e_pri] && (sbuf_cnt[3][u_e_pri] >= PRI_Q_DEPTH))
+                begin seg_flush[3][u_e_pri] = 1'b1; n_acc[3][u_e_pri] = '0; end
+                tmp[3][u_e_pri][n_acc[3][u_e_pri]] = {ko_pre_vld, ko_dma_addr, ko_pre_op,
                                       3'd5, '0, 3'd0};
-            n_acc[3][u_e_pri] = 1'b1;
+            n_acc[3][u_e_pri] = n_acc[3][u_e_pri] + 1'b1;
+            u_e_acc = 1'b1;
         end
-        if (u_i_acc) begin
-                tmp[4][u_i_pri][0] = {ko_pre_vld, ko_dma_addr, ko_pre_op,
+        u_i_acc = 1'b0;
+        if (u_i_vld) begin
+            if (!seg_flush[4][u_i_pri] && (sbuf_cnt[4][u_i_pri] >= PRI_Q_DEPTH))
+                begin seg_flush[4][u_i_pri] = 1'b1; n_acc[4][u_i_pri] = '0; end
+                tmp[4][u_i_pri][n_acc[4][u_i_pri]] = {ko_pre_vld, ko_dma_addr, ko_pre_op,
                                       3'd6, '0, 3'd0};
-            n_acc[4][u_i_pri] = 1'b1;
+            n_acc[4][u_i_pri] = n_acc[4][u_i_pri] + 1'b1;
+            u_i_acc = 1'b1;
         end
+        // 溢出告警组合：任意段清空 + 首个清空段位置
+        ovf_any = 1'b0; ovf_sbuf_c = 3'd0; ovf_pri_c = 3'd0;
+        for (int s = 0; s < N_SBUF; s++)
+            for (int g = 0; g < 8; g++)
+                if (seg_flush[s][g] && !ovf_any) begin
+                    ovf_any = 1'b1;
+                    ovf_sbuf_c = s[2:0];
+                    ovf_pri_c = g[2:0];
+                end
         // 拷贝到模块信号
         for (int s = 0; s < N_SBUF; s++)
         for (int g = 0; g < 8; g++) begin
@@ -217,6 +257,21 @@ module koa #(
         end
     end
 
+    // ---- 出口握手：消费 = out_vld && out_rdy；装载 = 有数据且（寄存器空或本拍被消费）。
+    // 装载拍才真正出队（head+1、cnt-1、out_new 脉冲），未消费时保持寄存器内容不变 ----
+    logic out_consume, out_load;
+    assign out_consume = out_vld && out_rdy;
+    assign out_load = rd_valid && (!out_vld || out_consume);
+
+    // ---- 溢出告警寄存输出（1 拍脉冲 + 段位图）----
+    logic ovf_vld_r;
+    logic [N_SBUF*8-1:0] ovf_seg_r;
+    logic [2:0] ovf_sbuf_r, ovf_pri_r;
+    assign ovf_vld = ovf_vld_r;
+    assign ovf_seg = ovf_seg_r;
+    assign ovf_sbuf = ovf_sbuf_r;
+    assign ovf_pri = ovf_pri_r;
+
     // ---- 主时序：合并向量写（按段）+ SP/RR 出队 + 输出寄存（一拍）----
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -228,35 +283,54 @@ module koa #(
             end
             rr_ptr <= '0;
             out_vld <= 1'b0;
+            out_new <= 1'b0;
             out_pri <= 3'd0;
             out_src <= 3'd0;
         out_stream <= 3'd0;
         out_cid <= '0;
         out_pos <= '0;
-        out_pre_vld <= 4'd0;
-        out_dma_addr <= '0;
-        out_pre_op <= 4'd0;
+            out_pre_vld <= 4'd0;
+            out_dma_addr <= '0;
+            out_pre_op <= 4'd0;
+            ovf_vld_r <= 1'b0;
+            ovf_seg_r <= '0;
+            ovf_sbuf_r <= '0;
+            ovf_pri_r <= '0;
         end else begin
-            // ---- 写入：按段合并写 wr_cnt 条（地址 tail+n，tail 按条数推进）----
+            // 溢出告警打拍
+            ovf_vld_r <= ovf_any;
+            ovf_sbuf_r <= ovf_sbuf_c;
+            ovf_pri_r <= ovf_pri_c;
+            for (int s = 0; s < N_SBUF; s++)
+                for (int g = 0; g < 8; g++)
+                    ovf_seg_r[s*8 + g] <= seg_flush[s][g];
+            // ---- 写入：按段合并写 wr_cnt 条（地址 tail+n，tail 按条数推进；
+            // 溢出清空的段从地址 0 重写，head 同步清零——已装载进输出寄存器的
+            // 报文不受清空影响）----
             for (int s = 0; s < N_SBUF; s++)
                 for (int g = 0; g < 8; g++)
                 if (wr_cnt[s][g] != 0) begin
-                automatic logic [PTR_W:0] tail_n = sbuf_tail[s][g] + wr_cnt[s][g];
+                automatic logic [PTR_W:0] base = seg_flush[s][g] ? '0 : sbuf_tail[s][g];
+                automatic logic [PTR_W:0] tail_n = base + wr_cnt[s][g];
                 for (int n = 0; n < MAX_WR_SEG; n++)
                 if (n < wr_cnt[s][g]) begin
-                    automatic logic [PTR_W:0] wa_n = sbuf_tail[s][g] + n[PTR_W-1:0];
+                    automatic logic [PTR_W:0] wa_n = base + n[PTR_W-1:0];
                     sbuf_mem[s][g][(wa_n >= PRI_Q_DEPTH) ? wa_n - PRI_Q_DEPTH
                     : wa_n[PTR_W-1:0]] <= wr_pkg[s][g][n];
                 end
                 sbuf_tail[s][g] <= (tail_n >= PRI_Q_DEPTH) ? tail_n - PRI_Q_DEPTH
                 : tail_n[PTR_W-1:0];
+                if (seg_flush[s][g])
+                    sbuf_head[s][g] <= '0;
             end
 
-            // ---- 读：SP/RR 选中段出队（head + out 拆包，用沿前状态）----
-            if (rd_valid) begin
+            // ---- 读：SP/RR 选中段出队（head + out 拆包，用沿前状态）；
+            // 仅在装载拍出队（下游反压时保持输出寄存器）----
+            if (out_load) begin
                 sbuf_head[sel_sbuf][sel_grp] <= (sbuf_head[sel_sbuf][sel_grp] == PRI_Q_DEPTH-1)
                 ? '0 : sbuf_head[sel_sbuf][sel_grp] + 1'b1;
                 out_vld <= 1'b1;
+                out_new <= 1'b1;
                 out_pri <= sel_grp;
                 out_src <= sel_grp;
         out_pre_vld <= sbuf_mem[sel_sbuf][sel_grp][sbuf_head[sel_sbuf][sel_grp]][PKG_W-1 -: 4];
@@ -266,14 +340,17 @@ module koa #(
         out_cid <= sbuf_mem[sel_sbuf][sel_grp][sbuf_head[sel_sbuf][sel_grp]][PKG_W-92 -: CID_W];
         out_pos <= sbuf_mem[sel_sbuf][sel_grp][sbuf_head[sel_sbuf][sel_grp]][PKG_W-92-CID_W -: POS_W];
             end else begin
-                out_vld <= 1'b0;
+                out_new <= 1'b0;
+                if (out_consume) out_vld <= 1'b0; // 最后一条被消费且无后续
             end
 
-            // ---- cnt 合并更新：写 +wr_cnt / 读 -1（同段同拍写读按条数净算）----
+            // ---- cnt 合并更新：写 +wr_cnt / 读 -1（仅装载拍）；溢出清空的段
+            // 从 0 起算（清空丢弃段内全部，同拍装载拍弹出的那条已离开该段）----
             for (int s = 0; s < N_SBUF; s++)
                 for (int g = 0; g < 8; g++)
-                    sbuf_cnt[s][g] <= sbuf_cnt[s][g] + wr_cnt[s][g]
-                    - ((rd_valid && (sel_sbuf == s) && (sel_grp == g)) ? 1'b1 : 1'b0);
+                    sbuf_cnt[s][g] <= (seg_flush[s][g] ? '0 : sbuf_cnt[s][g])
+                    + wr_cnt[s][g]
+                    - ((out_load && (sel_sbuf == s) && (sel_grp == g)) ? 1'b1 : 1'b0);
 
             // rr 指针每拍推进（同优先级 5 路轮询）
             rr_ptr <= (rr_ptr == N_SBUF-1) ? '0 : rr_ptr + 1'b1;

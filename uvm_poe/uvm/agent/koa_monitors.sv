@@ -90,7 +90,8 @@ class koa_in_monitor extends uvm_monitor;
     endfunction
 endclass
 
-// 输出 monitor：采样 out_vld，携带 out_src（= 优先级组号 0..7，scoreboard 按组 SP+RR 比对）
+// 输出 monitor：采样 out_new（实际出队/装载拍——出口反压时 out_vld 会保持多拍，
+// 必须按出队拍上报才能与 scoreboard 的 rr 逐拍模型对齐；数据寄存器同拍有效）
 class koa_out_monitor extends uvm_monitor;
     uvm_analysis_port #(koa_item) ap;
     `uvm_component_utils(koa_out_monitor)
@@ -104,7 +105,7 @@ class koa_out_monitor extends uvm_monitor;
         forever begin
             @(posedge ko_pkg::g_tb_cfg.vif.clk);
             #1;
-            if (ko_pkg::g_tb_cfg.vif.out_vld) begin
+            if (ko_pkg::g_tb_cfg.vif.out_new) begin
                 koa_item it = koa_item::type_id::create("it");
                 it.sbuf = ko_pkg::g_tb_cfg.vif.out_src;
                 it.plane = 0;

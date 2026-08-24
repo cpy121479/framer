@@ -291,6 +291,7 @@ function drawCards(ids) {
     ["EU 发射", m.emiteu, "burst", "util " + m.eu_util],
     ["DSE 发射", m.emitdma, "task", "util " + m.dse_util],
     ["延迟 p50", m.lat_p50, "拍"], ["延迟 p99", m.lat_p99, "拍"],
+    ["SBUF 溢出", m.sbuf_ovf ?? 0, "次"],
     ["RBA 反压", m.rba_bp_cyc ?? 0, "拍"],
   ];
   box.innerHTML = items.map(([k,v,u,sub]) =>

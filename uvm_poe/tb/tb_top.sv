@@ -15,6 +15,11 @@ module tb_top;
     koa_if #(.NUM_OH_PLANES(NUM_OH_PLANES), .NUM_X2X_PLANES(NUM_X2X_PLANES))
     u_if(.clk(clk), .rst_n(rst_n));
 
+    // ---- KOA SBUF 溢出告警（段满清空，输入不反压）----
+    logic ovf_vld;
+    logic [39:0] ovf_seg;
+    logic [2:0] ovf_sbuf, ovf_pri;
+
     koa #(.NUM_OH_PLANES(NUM_OH_PLANES), .NUM_X2X_PLANES(NUM_X2X_PLANES)) dut (
     .clk (clk),
     .rst_n (rst_n),
@@ -38,13 +43,16 @@ module tb_top;
     .u_i_vld (u_if.u_i_vld),
     .u_i_pri (u_if.u_i_pri), .u_i_rdy (u_if.u_i_rdy),
     .out_vld (u_if.out_vld),
+    .out_new (u_if.out_new),
+    .out_rdy (u_if.ko_rdy),
     .out_pri (u_if.out_pri),
     .out_src (u_if.out_src),
     .out_stream(u_if.out_stream),
     .out_cid (u_if.out_cid),
     .out_pos (u_if.out_pos),
     .ko_pre_vld(ko_pre_vld), .ko_dma_addr(ko_dma_addr), .ko_pre_op(ko_pre_op),
-    .out_pre_vld(u_if.out_pre_vld), .out_dma_addr(u_if.out_dma_addr), .out_pre_op(u_if.out_pre_op)
+    .out_pre_vld(u_if.out_pre_vld), .out_dma_addr(u_if.out_dma_addr), .out_pre_op(u_if.out_pre_op),
+    .ovf_vld(ovf_vld), .ovf_seg(ovf_seg), .ovf_sbuf(ovf_sbuf), .ovf_pri(ovf_pri)
     );
 
     // ================= POE 链路：KOA → THM → th_sch → burst_sch → CU/EU + dma_ctrl =================
@@ -226,6 +234,19 @@ module tb_top;
 
     // O 窗反压占位：固定 0（O 窗池设计后续补充）
     assign owin_bp = 1'b0;
+    // KOA 出口反压：THM 入口 ready 驱动到接口（KOA 保持输出寄存器，不丢报文）
+    assign u_if.ko_rdy = ko_rdy;
+    // 排空指示：线程池全 IDLE 且保序缓存空（供 base test 的 drain 等待）
+    always @(posedge clk) begin
+        automatic int busy = 0;
+        if (!rst_n) begin
+            ko_pkg::g_all_idle = 1'b0;
+        end else begin
+            for (int i = 0; i < 64; i++)
+                if (u_thm.th_state[i] != 2'd0) busy++;
+            ko_pkg::g_all_idle = (busy == 0) && (u_thm.buf_cnt == 0);
+        end
+    end
     // ---- 临时调试日志 ----
     integer thm_logf;
     logic [3:0] rba_bp_prev;
@@ -256,6 +277,8 @@ module tb_top;
             if (dma_full[d]) fifo_full_cyc[d]++;
         end
         // RBA 反压事件（复位握手后才有意义）
+        if (ovf_vld)
+            $fdisplay(thm_logf, "SBUF_OVF t=%0t sbuf=%0d pri=%0d", $time, ovf_sbuf, ovf_pri);
         if (rst_n && (rba_bp !== rba_bp_prev)) begin
             $fdisplay(thm_logf, "RBA_BP t=%0t bp=%b cnt=%0d/%0d/%0d/%0d",
             $time, rba_bp, rba_cnt[6:0], rba_cnt[13:7],
@@ -354,7 +377,8 @@ module tb_top;
     int meas_skip;
     longint cyc_cnt;
     longint meas_cyc;
-    longint n_cre, n_thdone, n_koa_out;
+    longint n_cre, n_thdone, n_koa_out, n_ko_in, n_ko_acc, n_ko_bp, n_sbuf_ovf;
+    longint n_in_s [7]; // 分来源输入握手：0=OH_EXT 1=OH_INS 2=APS_EXT 3=APS_INS 4=ALM 5=UART_EXT 6=UART_INS
     longint n_iss, n_iss_iv, n_iss_c;
     longint n_emit_eu, n_emit_dma, n_done_eu, n_done_dma;
     longint acc_pool, acc_buf, acc_q0, acc_q1, acc_ct, acc_fifo, acc_iss, acc_eu, acc_dse;
@@ -381,7 +405,9 @@ module tb_top;
         if (!rst_n) begin
             cyc_cnt = 0;
             meas_cyc = 0;
-            n_cre = 0; n_thdone = 0; n_koa_out = 0;
+            n_cre = 0; n_thdone = 0; n_koa_out = 0; n_ko_in = 0; n_ko_acc = 0;
+            n_ko_bp = 0; n_sbuf_ovf = 0;
+            for (int f = 0; f < 7; f++) n_in_s[f] = 0;
             n_iss = 0; n_iss_iv = 0; n_iss_c = 0;
             n_emit_eu = 0; n_emit_dma = 0; n_done_eu = 0; n_done_dma = 0;
             acc_pool = 0; acc_buf = 0; acc_q0 = 0; acc_q1 = 0; acc_ct = 0;
@@ -418,7 +444,27 @@ module tb_top;
             if (cyc_cnt >= meas_skip) begin
                 meas_cyc++;
                 // 吞吐
-                if (u_if.out_vld) n_koa_out++;
+                // KOA 输入握手（各业务源 vld&&rdy 求和，分来源累计）
+                for (int p = 0; p < NUM_OH_PLANES; p++) begin
+                    if (u_if.oh_e_vld[p] && u_if.oh_e_rdy[p]) begin n_ko_in++; n_in_s[0]++; end
+                    if (u_if.oh_i_vld[p] && u_if.oh_i_rdy[p]) begin n_ko_in++; n_in_s[1]++; end
+                end
+                for (int p = 0; p < NUM_X2X_PLANES; p++) begin
+                    if (u_if.aps_e_vld[p] && u_if.aps_e_rdy[p]) begin n_ko_in++; n_in_s[2]++; end
+                    if (u_if.aps_i_vld[p] && u_if.aps_i_rdy[p]) begin n_ko_in++; n_in_s[3]++; end
+                    if (u_if.alm_vld[p] && u_if.alm_rdy[p]) begin n_ko_in++; n_in_s[4]++; end
+                end
+                if (u_if.u_e_vld && u_if.u_e_rdy) begin n_ko_in++; n_in_s[5]++; end
+                if (u_if.u_i_vld && u_if.u_i_rdy) begin n_ko_in++; n_in_s[6]++; end
+                // KOA 出口：出队（koaout=实际出队条数；ko_acc=被 THM 收下拍，
+                // ko_bp=被反压保持拍数——出口握手后无丢弃，koaout≈ko_acc）
+                if (u_if.out_new) n_koa_out++;
+                if (u_if.out_vld && ko_rdy) n_ko_acc++;
+                if (u_if.out_vld && !ko_rdy) n_ko_bp++;
+                // SBUF 段溢出清空（输入不反压，段满丢弃段内全部并告警）
+                if (ovf_vld)
+                    for (int sg = 0; sg < 40; sg++)
+                        if (ovf_seg[sg]) n_sbuf_ovf++;
                 if (iss_vld0) begin
                     n_iss++;
                     if (ready_burst[iss_tid0*BURST_W + 25]) n_iss_c++;
@@ -492,8 +538,9 @@ module tb_top;
                 if (cum >= tgt) begin p99 = b * LAT_BW; break; end
             end
         end
-        $display("BENCH_CSV tag=%0s seed=%0d cyc=%0d cre=%0d thdone=%0d koaout=%0d iss=%0d iss_iv=%0d iss_c=%0d emiteu=%0d emitdma=%0d doneeu=%0d donedma=%0d iss_util=%.3f eu_util=%.3f dse_util=%.3f pool_avg=%.2f buf_avg=%.2f q0_avg=%.2f q1_avg=%.2f ct_avg=%.2f fifo_avg=%.2f rba_min=%0d/%0d/%0d/%0d rba_bp_cyc=%0d fifo_full_cyc=%0d lat_avg=%.1f lat_p50=%0d lat_p99=%0d lat_max=%0d lat_n=%0d",
-                 bench_tag, bench_seed, meas_cyc, n_cre, n_thdone, n_koa_out,
+        $display("BENCH_CSV tag=%0s seed=%0d cyc=%0d cre=%0d thdone=%0d ko_in=%0d koaout=%0d ko_acc=%0d ko_bp=%0d sbuf_ovf=%0d iss=%0d iss_iv=%0d iss_c=%0d emiteu=%0d emitdma=%0d doneeu=%0d donedma=%0d iss_util=%.3f eu_util=%.3f dse_util=%.3f pool_avg=%.2f buf_avg=%.2f q0_avg=%.2f q1_avg=%.2f ct_avg=%.2f fifo_avg=%.2f rba_min=%0d/%0d/%0d/%0d rba_bp_cyc=%0d fifo_full_cyc=%0d lat_avg=%.1f lat_p50=%0d lat_p99=%0d lat_max=%0d lat_n=%0d",
+                 bench_tag, bench_seed, meas_cyc, n_cre, n_thdone, n_ko_in,
+                 n_koa_out, n_ko_acc, n_ko_bp, n_sbuf_ovf,
                  n_iss, n_iss_iv, n_iss_c, n_emit_eu, n_emit_dma, n_done_eu, n_done_dma,
                  iss_util, eu_util, dse_util,
                  (meas_cyc > 0) ? 1.0 * acc_pool / meas_cyc : 0.0,
@@ -507,6 +554,9 @@ module tb_top;
                  (lat_n > 0) ? 1.0 * lat_sum / lat_n : 0.0,
                  p50, p99, lat_max, lat_n);
         $fdisplay(thm_logf, "BENCH lat_hist(10beat桶): min=%0d max=%0d", lat_min, lat_max);
+        $display("BENCH_SRC oh_e=%0d oh_i=%0d aps_e=%0d aps_i=%0d alm=%0d u_e=%0d u_i=%0d total=%0d",
+                 n_in_s[0], n_in_s[1], n_in_s[2], n_in_s[3], n_in_s[4],
+                 n_in_s[5], n_in_s[6], n_ko_in);
     end
 
     // 预读入口激励：每拍随机 0..4 组预读（每组约 1/16 概率，模拟业务流预读请求）

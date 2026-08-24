@@ -6,8 +6,11 @@
 
 - **KOA**：7 条 KO 输入流（5 条 fgOTN/X2X 流带 cid/pos + 2 条串口流），写入
   **5 个独立 SBUF**（EXT/INS/ALM/UART_EXT/UART_INS，每个深度 2560，按 pri 拆 8 段、
-  每段 320 深）；同段合并向量写（上限 16）；调度为组间 SP + 组内 RR，每拍输出 1 条
-  （`out_vld/out_pri/out_src(=优先级组号)/out_stream/out_cid/out_pos/pre_read`）。
+  每段 320 深）；同段合并向量写（上限 16），**段满溢出保护**：不反压输入流，清空
+  该段（丢弃段内全部）并上报告警（ovf_vld/ovf_seg，tb 计 sbuf_ovf）；调度为组间
+  SP + 组内 RR，出口 **valid/ready 握手**（`out_vld` 保持至 `ko_rdy`，未就绪不出队
+  不丢，反压传导至输入侧；`out_new` 为实际出队拍指示），输出带
+  `out_pri/out_src(=优先级组号)/out_stream/out_cid/out_pos/pre_read`。
 - **THM**：保序（同 `(stream,cid,pos)` 活跃线程 → 8 深缓存 FIFO 放行；不能建线程
   且缓存满才 `ko_rdy=0`）+ 线程状态机（IDLE→READY→ISSUED→DONE）+ CSR + ts 级互斥锁
   （16 个，仅一级发射阻塞）；线程描述从模板池随机取（10 个模板 T0~T9，每 ts ≤8 burst）。
@@ -105,8 +108,11 @@ SEED=1 TPL_MASK=64 BENCH_TAG=t6_c RUN_US=50 WAVE=0 ./run_verilator.sh
 
 仿真结束 stdout 输出一行 `BENCH_CSV tag=... seed=... cyc=... ...`，指标：
 
-- **吞吐**：`koaout`（KOA 出队）/ `cre`/`thdone`（线程创建/完成）/ `iss`（一级发射，
-  分 `iss_iv`/`iss_c`）/ `emiteu`/`emitdma`/`doneeu`/`donedma`（二级发射与 done）；
+- **吞吐**：`ko_in`（KOA 输入握手）/`koaout`（实际出队条数 = out_new）/`ko_acc`
+  （THM 收下）/`ko_bp`（出口被反压保持的拍数，握手后 koaout≈ko_acc 无丢弃）/
+  `cre`/`thdone`（线程创建/完成）/ `iss`（一级发射，分 `iss_iv`/`iss_c`）/
+  `emiteu`/`emitdma`/`doneeu`/`donedma`（二级发射与 done）/
+  `sbuf_ovf`（SBUF 段溢出清空次数，告警）；
 - **利用率**：`iss_util`（÷2/拍）、`eu_util`（÷2/拍，EU 桩理论上限 0.5/个）、
   `dse_util`（÷4/拍，RBA 稳态理论上限 ≈0.88/DSE）；
 - **占用**（时间平均）：`pool_avg`(64)/`buf_avg`(8)/`q0/q1_avg`(8)/`ct_avg`(16)/
@@ -115,6 +121,8 @@ SEED=1 TPL_MASK=64 BENCH_TAG=t6_c RUN_US=50 WAVE=0 ./run_verilator.sh
 - **延迟**：线程创建→T_DONE 直方图（10 拍一桶）的 `lat_avg/lat_p50/lat_p99/lat_max`。
 
 正确性前提：任何场景下 idle=64、UVM_ERROR=0、发射-完成守恒，违反则结果作废。
+出口反压下饱和场景存在积压：test 收尾前等线程排空（上限 `+DRAIN_MAX`，默认
+100µs）；SBUF 未排空属正常，scoreboard 按"输入-输出 = 队列剩余"校验守恒。
 
 ## Benchmark GUI
 

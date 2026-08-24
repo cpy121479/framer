@@ -13,6 +13,7 @@ package ko_pkg;
 
     // 包级全局握手对象（Verilator 下 config_db 不可靠，走全局引用）
     bit g_reset_done;
+    bit g_all_idle; // 排空指示：线程池全 IDLE 且保序缓存空（tb_top 逐拍维护）
 
 `include "koa_item.sv"
 `include "koa_tb_config.sv"

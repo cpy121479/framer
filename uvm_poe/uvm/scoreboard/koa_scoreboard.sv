@@ -13,7 +13,7 @@ class koa_scoreboard extends uvm_scoreboard;
 
     localparam int N_SBUF = 5;
     localparam int N_PRI = 8;
-    localparam int MAXQ = 512; // 每个 (SBUF,pri) 段深度（≥KOA 段深 320）
+    localparam int MAXQ = 320; // 每个 (SBUF,pri) 段深度（= KOA PRI_Q_DEPTH，溢出清空对齐）
 
     koa_item all_ev[$];
     koa_item q_items[N_SBUF][N_PRI][MAXQ];
@@ -22,6 +22,8 @@ class koa_scoreboard extends uvm_scoreboard;
     int peak_q_occ;
     int in_cnt, out_cnt;
     int n_mismatch;
+    int ovf_cnt; // SBUF 段溢出清空次数（与 DUT ovf 告警对应）
+    int drop_cnt; // 溢出清空丢弃的报文数（守恒：输入-输出 = 队列剩余 + 丢弃）
     `uvm_component_utils(koa_scoreboard)
 
     function new(string name = "koa_scoreboard", uvm_component parent = null);
@@ -106,14 +108,17 @@ class koa_scoreboard extends uvm_scoreboard;
                     int s = stream_sbuf(all_ev[i+a].stream);
                     int g = all_ev[i+a].pri;
                     if (q_cnt[s][g] == MAXQ) begin
-                        `uvm_error("SCB", $sformatf("SBUF%0d 优先级段 %0d 满（输入超限）", s, g))
-                        n_mismatch++;
-                    end else begin
-                        q_items[s][g][q_tail[s][g]] = all_ev[i+a];
-                        q_tail[s][g] = (q_tail[s][g] == MAXQ-1) ? 0 : q_tail[s][g] + 1;
-                        q_cnt[s][g] = q_cnt[s][g] + 1;
-                        if (q_cnt[s][g] > peak_q_occ) peak_q_occ = q_cnt[s][g];
+                        // 段满：DUT 溢出清空——丢弃段内全部（含本拍已入队的同段项）
+                        drop_cnt += q_cnt[s][g];
+                        q_head[s][g] = 0;
+                        q_tail[s][g] = 0;
+                        q_cnt[s][g] = 0;
+                        ovf_cnt++;
                     end
+                    q_items[s][g][q_tail[s][g]] = all_ev[i+a];
+                    q_tail[s][g] = (q_tail[s][g] == MAXQ-1) ? 0 : q_tail[s][g] + 1;
+                    q_cnt[s][g] = q_cnt[s][g] + 1;
+                    if (q_cnt[s][g] > peak_q_occ) peak_q_occ = q_cnt[s][g];
                 end
                 i += n;
             end else begin
@@ -149,19 +154,27 @@ class koa_scoreboard extends uvm_scoreboard;
                 i++;
             end
         end
-        if (in_cnt != out_cnt)
-            `uvm_error("SCB", $sformatf("数量不守恒：输入=%0d 输出=%0d", in_cnt, out_cnt))
+        // 终检：出口反压下允许未排空——守恒条件改为 输入-输出 == 队列剩余
+        begin
+            int leftover = 0;
             for (int p = 0; p < N_PRI; p++)
                 for (int s = 0; s < N_SBUF; s++)
-                    if (q_cnt[s][p] != 0)
-                        `uvm_error("SCB", $sformatf("SBUF%0d 优先级段 %0d 未清空：%0d 条", s, p, q_cnt[s][p]))
-                        `uvm_info("SCB", $sformatf("输入=%0d 输出=%0d，错配=%0d，优先级队列峰值占用=%0d",
-                        in_cnt, out_cnt, n_mismatch, peak_q_occ), UVM_LOW)
-                        for (int f = 0; f < 7; f++)
-                            if (ko_pkg::g_tb_cfg.bp_clks[f] != 0)
-                                `uvm_info("SCB", $sformatf("反压[%0s]: 事件%0d 次，共%0d 拍（%.1f%% 窗口）",
-                                fnames[f], ko_pkg::g_tb_cfg.bp_events[f], ko_pkg::g_tb_cfg.bp_clks[f],
-                                100.0 * ko_pkg::g_tb_cfg.bp_clks[f] / (ko_pkg::g_tb_cfg.run_us * 1000.0)),
-                                UVM_LOW)
-                            endfunction
-                        endclass
+                    leftover += q_cnt[s][p];
+            if (in_cnt - out_cnt != leftover + drop_cnt)
+                `uvm_error("SCB", $sformatf("数量不守恒：输入-输出=%0d 队列剩余+溢出丢弃=%0d",
+                in_cnt - out_cnt, leftover + drop_cnt))
+            else if (leftover != 0)
+                `uvm_info("SCB", $sformatf("未排空（出口反压积压）：SBUF 剩余 %0d 条", leftover), UVM_LOW)
+            if (ovf_cnt != 0)
+                `uvm_warning("SCB", $sformatf("SBUF 段溢出清空 %0d 次、丢弃 %0d 条（告警：段满丢弃段内全部，输入不反压）", ovf_cnt, drop_cnt))
+            `uvm_info("SCB", $sformatf("输入=%0d 输出=%0d，错配=%0d，优先级队列峰值占用=%0d",
+            in_cnt, out_cnt, n_mismatch, peak_q_occ), UVM_LOW)
+            for (int f = 0; f < 7; f++)
+                if (ko_pkg::g_tb_cfg.bp_clks[f] != 0)
+                    `uvm_info("SCB", $sformatf("反压[%0s]: 事件%0d 次，共%0d 拍（%.1f%% 窗口）",
+                    fnames[f], ko_pkg::g_tb_cfg.bp_events[f], ko_pkg::g_tb_cfg.bp_clks[f],
+                    100.0 * ko_pkg::g_tb_cfg.bp_clks[f] / (ko_pkg::g_tb_cfg.run_us * 1000.0)),
+                    UVM_LOW)
+        end
+    endfunction
+endclass
