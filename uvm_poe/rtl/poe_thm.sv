@@ -6,7 +6,11 @@
 //   存入 8 深报文缓存等待；前序线程释放后按 FIFO 放行；不能建线程且缓存满才反压 ko_rdy
 // - 线程状态机：IDLE→READY→ISSUED→DONE（WAIT 并入 ISSUED 打拍）
 //   READY ≠ 回 IDLE：回 READY 后可发射下一个 burst（不限同一 ts），bs_pc 跨 ts 连续推进；
-//   cur_ts 仅由 cu_done/dma_done 统计推进，一级队列可含 cur_ts 及更靠后 ts 的 burst
+//   跳转边界（ts 末条 burst + 下一 ts 编号不连续）发射后等待 4+t 拍（1+3+t）；
+//   cur_ts 仅由 eu_done/dma_done 统计推进，一级队列可含 cur_ts 及更靠后 ts 的 burst；
+//   ts 完成判据 = done 事件数 ≥ 预期值 th_dneed（i/v burst 计 1、c_task burst 按有效
+//   task 数计，空 c_task burst 计 0、不占 DSE 发射机会），th_dneed=0 的 ts 无事件，
+//   由每拍兜底检查推进
 // - 建线程时同步生成 CSR 表项（csr_t，th_id 6bit、cw 8×6B），th_stat/cur_ts 与状态机
 //   同步；dma_c/cw 暴露给 th_sch（解析 c_task 时按 dma_id 查询，只读）
 // - pre_read 转发：带预读 KO 建线程时同拍把 4 组 {vld, tid, dma_addr, op} 转发给
@@ -88,8 +92,9 @@ module poe_thm #(
     logic [3:0] th_ts_idx [MAX_THREADS]; // 当前在第几个 ts（序号 0..n-1）
     logic [TS_ID_W-1:0] th_ts_id_r [MAX_THREADS][MAX_TS]; // 每 ts 编号（递增可跳转）
     logic [7:0] th_wait [MAX_THREADS];
-    logic [3:0] th_done_acc [MAX_THREADS][MAX_TS]; // 每 ts 已完成 burst 数（done 按发射序匹配）
+    logic [4:0] th_done_acc [MAX_THREADS][MAX_TS]; // 每 ts 已累计 done 事件数（i/v burst 1、c_task 按有效 task 数）
     logic [3:0] th_need [MAX_THREADS][MAX_TS]; // 每 ts 实际执行 burst 数（= ts_bs，≤8）
+    logic [4:0] th_dneed [MAX_THREADS][MAX_TS]; // 每 ts 预期 done 事件数（i/v=1 / c=有效 task 数，空 c_task=0）
     logic [7:0] th_off [MAX_THREADS][MAX_TS+1]; // 每 ts 起始累计偏移（off[k]=前 k 个 ts 的 need 和）
     logic [3:0] th_sel_ts [MAX_THREADS]; // bs_pc 所属 ts 序号（组合推导）
     logic [2:0] th_sel_idx [MAX_THREADS]; // bs_pc 在所属 ts 内的 burst 序号（组合推导）
@@ -280,6 +285,29 @@ module poe_thm #(
         end
     end
 
+    // ---- 跳转边界判定：当前 burst 为所属 ts 末条、存在下一 ts 且下一 ts 编号不连续
+    // （ts_id 跳变 = 真实跳转标记，br 为预留）。该 burst 发射后等待 4+t 拍：
+    // 1 拍基础 + 3 拍完成反馈（跳转后须等 cur_ts 推进才能发下一 ts 的 burst）
+    // + 随机竞争 t = $urandom % (jump_cnt+1)，jump_cnt = 当拍 READY 线程中
+    // 当前 burst 处于跳转边界的个数 ----
+    function automatic logic is_jump_burst(input int i);
+        automatic logic [3:0] k = th_sel_ts[i];
+        is_jump_burst = (k + 4'd1 < {1'b0, th_ts_n[i]}) &&
+            (th_need[i][k] != 4'd0) &&
+            ({1'b0, th_sel_idx[i]} + 4'd1 == {1'b0, th_need[i][k]}) &&
+            (th_ts_id_r[i][k+1] != th_ts_id_r[i][k] + 1'b1);
+    endfunction
+
+    int jump_cnt;
+    always_comb begin
+        jump_cnt = 0;
+        for (int i = 0; i < MAX_THREADS; i++)
+            if (th_state[i] == T_READY &&
+                th_bs_pc[i] < th_off[i][th_ts_n[i]] && // 上界 = 本线程流水末（非 MAX_TS）
+                is_jump_burst(i))
+                jump_cnt++;
+    end
+
     // ---- 可发射 / 调度辅助 ----
     always_comb begin
         for (int i = 0; i < MAX_THREADS; i++) begin
@@ -323,6 +351,7 @@ module poe_thm #(
                 th_wait[i] <= '0;
                 for (int k = 0; k < MAX_TS; k++) th_done_acc[i][k] <= '0;
                 for (int k = 0; k < MAX_TS; k++) th_need[i][k] <= '0;
+                for (int k = 0; k < MAX_TS; k++) th_dneed[i][k] <= '0;
                 csr[i] <= '0;
             end
             for (int i = 0; i < N_LOCK; i++) lock_owner[i] <= LOCK_FREE;
@@ -379,13 +408,32 @@ module poe_thm #(
                     th_pri_r[t] <= pr;
                     for (int k = 0; k < MAX_TS; k++)
                         th_ts_id_r[t][k] <= tid_vec[k*TS_ID_W +: TS_ID_W];
-                    // 每 ts 独立：实际条数 = bs[k]（br 字段为预留，不截断）
+                    // 每 ts 独立：实际条数 = bs[k]（br 字段为预留，不截断）；
+                    // th_dneed = 该 ts 预期 done 事件数：i/v burst 计 1（有 task 即回
+                    // 1 个 eu_done）、c_task burst 按 c0/c1+dma_c 有效 task 数计
+                    // （空 c_task burst 为 0，不推占位 task、不占 DSE 发射机会）
                     for (int k = 0; k < MAX_TS; k++) begin
                         automatic int need_k = bs[k*4 +: 4];
-                        th_need[t][k] <= need_k[3:0];
-                        for (int m = 0; m < MAX_BURST; m++)
-                            th_burst_r[t][k][m] <=
+                        automatic logic [4:0] dneed_k = 5'd0;
+                        for (int m = 0; m < MAX_BURST; m++) begin
+                            automatic logic [BURST_W-1:0] bw =
                                 bp[(k*MAX_BURST + m)*BURST_W +: BURST_W];
+                            automatic burst_c_t cb = bw;
+                            th_burst_r[t][k][m] <= bw;
+                            if (m < need_k) begin
+                                if (!cb.burst_type)
+                                    dneed_k = dneed_k +
+                                        {(cb.c0 || (cb.vld_cu && cb.c1)) ? 5'd1 : 5'd0};
+                                else begin
+                                    if (cb.c0 && dc[cb.dma_id0])
+                                        dneed_k = dneed_k + 5'd1;
+                                    if (cb.vld_cu && cb.c1 && dc[cb.dma_id1])
+                                        dneed_k = dneed_k + 5'd1;
+                                end
+                            end
+                        end
+                        th_need[t][k] <= need_k[3:0];
+                        th_dneed[t][k] <= dneed_k;
                     end
                     th_stream[t] <= st;
                     th_cid[t] <= c;
@@ -432,7 +480,10 @@ module poe_thm #(
                 if (biv.st && biv.lock_req &&
                     lock_owner[biv.lock_id] == LOCK_FREE)
                     lock_owner[biv.lock_id] <= iss_tid0;
-                th_wait[iss_tid0] <= 8'd1; // 发射后 1 拍进入下一 burst
+                if (is_jump_burst(iss_tid0))
+                    th_wait[iss_tid0] <= 4 + ($urandom % (jump_cnt + 1)); // 1+3+t
+                else
+                    th_wait[iss_tid0] <= 8'd1; // 发射后 1 拍进入下一 burst
             end
             if (iss_vld1 && th_state[iss_tid1] == T_READY &&
             th_bs_pc[iss_tid1] < th_off[iss_tid1][th_ts_n[iss_tid1]]) begin
@@ -447,7 +498,10 @@ module poe_thm #(
                     !(iss_vld0 && biv0.st && biv0.lock_req &&
                       biv0.lock_id == biv.lock_id))
                     lock_owner[biv.lock_id] <= iss_tid1; // 与 iss0 同锁时让 iss0 先占
-                th_wait[iss_tid1] <= 8'd1;
+                if (is_jump_burst(iss_tid1))
+                    th_wait[iss_tid1] <= 4 + ($urandom % (jump_cnt + 1));
+                else
+                    th_wait[iss_tid1] <= 8'd1;
             end
             // ---- ISSUED 打拍推进 bs_pc（跨 ts 连续，burst 队列允许超前 ts） ----
             for (int i = 0; i < MAX_THREADS; i++) begin
@@ -461,48 +515,58 @@ module poe_thm #(
                     end
                 end
             end
-            // ---- 完成推进：cu0/cu1/dma 三路 done 聚合后逐事件推进（支持同 tid 多 done、跨 ts） ----
-            for (int u = 0; u < 6; u++) begin
-                if (u < done_n) begin
-                    automatic logic [5:0] dt = done_tid_l[u];
-                    if (th_state[dt] != T_IDLE && th_state[dt] != T_DONE) begin
-                        // done 由执行单元带回 ts 序号（发射时随 burst 下发），直接累加对应 ts
-                        automatic logic [3:0] sh [MAX_TS];
-                        automatic logic [3:0] nts = th_ts_idx[dt];
-                        automatic logic [3:0] old_idx = th_ts_idx[dt];
-                        automatic logic [TS_ID_W-1:0] ncts = th_cur_ts[dt];
-                        automatic logic done_th = 1'b0;
-                        for (int k = 0; k < MAX_TS; k++) sh[k] = th_done_acc[dt][k];
-                        if (done_tidx_l[u] < MAX_TS)
+            // ---- 完成推进：eu0/eu1/dma0..3 六路 done 聚合（同 (tid,tidx) 已合并）后
+            //      逐线程推进；ts 完成判据 = done 事件数 ≥ th_dneed（预期事件数）且
+            //      该 ts burst 已全部发射（th_sel_ts 越过该 ts 或流水到头——事件本身
+            //      隐含已发射，此条件专为 th_dneed=0 的无事件 ts 兜底检查服务）；
+            //      每拍运行使 dneed=0 的 ts 无 done 事件也能推进 ----
+            for (int i = 0; i < MAX_THREADS; i++) begin
+                if (th_state[i] != T_IDLE && th_state[i] != T_DONE) begin
+                    // done 由执行单元带回 ts 序号（发射时随 burst 下发），累加对应 ts
+                    automatic logic [4:0] sh [MAX_TS];
+                    automatic logic [3:0] nts = th_ts_idx[i];
+                    automatic logic [3:0] old_idx = th_ts_idx[i];
+                    automatic logic [TS_ID_W-1:0] ncts = th_cur_ts[i];
+                    automatic logic done_th = 1'b0;
+                    for (int k = 0; k < MAX_TS; k++) sh[k] = th_done_acc[i][k];
+                    // 同线程不同 tidx 本拍至多一条（跨 ts done 受 cur_ts 门控互斥）；
+                    // 写回按事件逐字进行，不经 sh 兜底路径写回
+                    for (int u = 0; u < 6; u++)
+                        if (u < done_n && done_tid_l[u] == i[5:0] &&
+                            done_tidx_l[u] < MAX_TS) begin
                             sh[done_tidx_l[u]] = sh[done_tidx_l[u]] + done_cnt_l[u];
-                        th_done_acc[dt][done_tidx_l[u]] <= sh[done_tidx_l[u]];
-                        for (int k = 0; k < 8; k++) begin
-                            if (sh[nts] >= th_need[dt][nts]) begin
-                                if (nts + 1 >= th_ts_n[dt]) begin
-                                    done_th = 1'b1;
-                                    break;
-                                end
-                                nts = nts + 1;
-                                ncts = th_ts_id_r[dt][nts];
-                            end else begin
+                            th_done_acc[i][done_tidx_l[u]] <= sh[done_tidx_l[u]];
+                        end
+                    for (int k = 0; k < 8; k++) begin
+                        if (sh[nts] >= th_dneed[i][nts] &&
+                            (th_sel_ts[i] > nts ||
+                             th_bs_pc[i] >= th_off[i][th_ts_n[i]])) begin
+                            if (nts + 1 >= th_ts_n[i]) begin
+                                done_th = 1'b1;
                                 break;
                             end
+                            nts = nts + 1;
+                            ncts = th_ts_id_r[i][nts];
+                        end else begin
+                            break;
                         end
+                    end
+                    if (done_th || nts != old_idx) begin
                         // ts 完成时释放锁：被跨过的 ts（old_idx..nts-1）若首个 burst
                         // 声明 unlock_req，则释放该锁（unlock ts 也在锁保护下执行完）
                         for (int k = old_idx; k < nts; k++) begin
-                            automatic burst_iv_t ub = th_burst_r[dt][k][0];
+                            automatic burst_iv_t ub = th_burst_r[i][k][0];
                             if (ub.st && ub.unlock_req &&
-                                lock_owner[ub.lock_id] == dt[5:0])
+                                lock_owner[ub.lock_id] == i[5:0])
                                 lock_owner[ub.lock_id] <= LOCK_FREE;
                         end
                         if (done_th) begin
-                            th_state[dt] <= T_DONE;
-                            csr[dt].th_stat <= T_DONE;
+                            th_state[i] <= T_DONE;
+                            csr[i].th_stat <= T_DONE;
                         end else begin
-                            th_ts_idx[dt] <= nts;
-                            th_cur_ts[dt] <= ncts;
-                            csr[dt].cur_ts <= ncts;
+                            th_ts_idx[i] <= nts;
+                            th_cur_ts[i] <= ncts;
+                            csr[i].cur_ts <= ncts;
                         end
                     end
                 end

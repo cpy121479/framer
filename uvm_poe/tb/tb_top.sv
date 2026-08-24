@@ -317,7 +317,7 @@ module tb_top;
         $time, eu_done_tid0, ready_curts[eu_done_tid0*6 +: 6],
             u_thm.csr[eu_done_tid0].cur_ts,
         u_thm.th_done_acc[eu_done_tid0][u_thm.th_ts_idx[eu_done_tid0]],
-        u_thm.th_need[eu_done_tid0][u_thm.th_ts_idx[eu_done_tid0]],
+        u_thm.th_dneed[eu_done_tid0][u_thm.th_ts_idx[eu_done_tid0]],
             u_thm.th_ts_n[eu_done_tid0], u_thm.th_bs_pc[eu_done_tid0],
             u_thm.th_state[eu_done_tid0]);
         if (eu_done_vld1)
@@ -325,7 +325,7 @@ module tb_top;
         $time, eu_done_tid1, ready_curts[eu_done_tid1*6 +: 6],
             u_thm.csr[eu_done_tid1].cur_ts,
         u_thm.th_done_acc[eu_done_tid1][u_thm.th_ts_idx[eu_done_tid1]],
-        u_thm.th_need[eu_done_tid1][u_thm.th_ts_idx[eu_done_tid1]],
+        u_thm.th_dneed[eu_done_tid1][u_thm.th_ts_idx[eu_done_tid1]],
             u_thm.th_ts_n[eu_done_tid1], u_thm.th_bs_pc[eu_done_tid1],
             u_thm.th_state[eu_done_tid1]);
         for (int d = 0; d < 4; d++)
@@ -335,7 +335,7 @@ module tb_top;
                 $time, d, dt, ready_curts[dt*6 +: 6],
                     u_thm.csr[dt].cur_ts,
                 u_thm.th_done_acc[dt][u_thm.th_ts_idx[dt]],
-                u_thm.th_need[dt][u_thm.th_ts_idx[dt]],
+                u_thm.th_dneed[dt][u_thm.th_ts_idx[dt]],
                     u_thm.th_ts_n[dt], u_thm.th_bs_pc[dt],
                     u_thm.th_state[dt]);
             end

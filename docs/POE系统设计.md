@@ -170,17 +170,28 @@ pre_dma_addr, pre_op}` 转发给 burst_sch 的 8 深 pre_buf（占位，吸收�
 **同拍互斥**：th_sch 对两个 winner 若同为同锁 id 的 loc burst（st=1 && lock_req），
 只发高优先者，次者保持 READY 下拍重选。
 
+**发射间隔**：同线程相邻 burst 最小 2 拍（T_ISSUED 打拍 1 拍回 READY）。当发射的
+burst 为所属 ts **末条**且下一 ts 编号**不连续**（真实跳转标记，br 为预留）时，
+发射后等待扩展为 `4 + t` 拍：1 拍基础 + 3 拍完成反馈（跳转后须等 `cur_ts` 推进，
+下一 ts 的 burst 才能过二级发射 `ts==cur_ts` 门控）+ 随机竞争
+`t = rand(0..n)`，`n` = 当拍 READY 线程中当前 burst 处于跳转边界的个数
+（`jump_cnt`，触发条件不限 burst 类型——跳转是线程级行为）。
+
 ### 5.5 cur_ts 推进
 
-- done 携带 ts 序号（tidx），按 tidx 累加对应 ts 完成数；
-- 当前 ts 完成数 ≥ need → 跨 ts（ts 编号跳转），末 ts 完成 → T_DONE；
+- done 携带 ts 序号（tidx），按 tidx 累加对应 ts 的 **done 事件数**；
+- ts 完成判据：done 事件数 ≥ 预期 done 数 `th_dneed`（i/v burst 计 1，c_task burst
+  按有效 task 数计，**空 c_task burst 计 0**），且该 ts burst 已全部发射；
+  预期 done 数为 0 的 ts（如纯空 c_task）无 done 事件，由 THM 每拍兜底检查推进；
+- 当前 ts 完成 → 跨 ts（ts 编号跳转），末 ts 完成 → T_DONE；
 - 跨过 unlock_req 的 ts → 释放锁；T_DONE 兜底释放本线程全部锁。
 
 ### 5.6 内部表项
 
 `th_state / th_ts_n / th_pri_r / th_burst_r[ts][burst] / th_stream/cid/pos /
 th_bs_pc / th_cur_ts / th_ts_idx / th_ts_id_r / th_wait / th_done_acc[ts] /
-th_need[ts] / th_off / th_sel_ts / th_sel_idx`。
+th_need[ts]（每 ts burst 数，bs_pc 映射用）/ th_dneed[ts]（每 ts 预期 done 事件数，
+ts 完成判据）/ th_off / th_sel_ts / th_sel_idx`。
 
 ## 6. th_sch（一级发射）
 
@@ -189,8 +200,8 @@ th_need[ts] / th_off / th_sel_ts / th_sel_idx`。
   c_task burst 解析出有效 c_task（c0/c1 + dma_c 判有效、cw 解析 tag/op），
   存入独立 c_task 缓存（16 深槽池），满则反压 c_task 发射；
 - 槽池无先后关系：二级发射按优先级选任意有效槽，ack 逐槽清空；
-- 空 c_task burst（无有效任务）推 1 个占位 task（tag=0/op=0）入缓存，
-  保证 dma 回 done（THM cur_ts 依赖）；
+- 空 c_task burst（无有效任务）不入 c_task 缓存、不占 DSE 发射机会，也不产生
+  done（THM ts 完成判据为预期 done 事件数 th_dneed，见 §5.5）；
 - 完成反馈携带 ts_idx（发射时随 burst 下发）。
 
 ## 7. burst_sch（二级发射）
@@ -272,4 +283,4 @@ c_task 留在缓存下拍重选）；每个 FIFO 每拍出队 1 个（模型化�
 - pre_read 预读执行语义（当前 THM 建线程拍转发 → burst_sch 8 深 pre_buf 占位吸收）；
 - SMC/RBA 总线握手与深度；
 - CSR 的 err/ccr/o_mes/tw 语义；
-- 线程模板池与锁模板的最终方案（当前 9 个模板 T0~T8）。
+- 线程模板池与锁模板的最终方案（当前 10 个模板 T0~T9）。

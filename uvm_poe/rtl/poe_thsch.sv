@@ -7,7 +7,8 @@
 //   * q0/q1（8 深槽池）仅存放 i/v burst，项含优先级，供 burst_sch 无头阻按优先级调度；
 //   * c_task burst 解析出有效 c_task（c0/c1 + CSR.dma_c 判有效，CSR.cw 解析 tag/op），
 //     存入独立 c_task 缓存（16 深槽池，按优先级调度；满则反压 c_task 发射）；
-//     空 c_task burst（无有效任务）推 1 个占位 task，保证 dma 回 done（THM cur_ts 依赖）
+//     空 c_task burst（无有效任务）不入缓存、不占 DSE 发射机会、不产生 done
+//     （THM 的 ts 完成判据为预期 done 事件数 th_dneed，见 poe_thm）
 // - 槽池无先后关系：调度器按优先级选任意有效槽，ack 逐槽清空
 module poe_thsch #(
     parameter int MAX_THREADS = 64,
@@ -139,7 +140,7 @@ module poe_thsch #(
             if (!ct_vld_r[i]) free_ct = free_ct + 1'b1;
     end
 
-    // ---- c_task burst 需占用的缓存槽数（无有效任务时按 1 计，保证 done 路径） ----
+    // ---- c_task burst 需占用的缓存槽数（空 c_task = 0：不入缓存、无 done） ----
     logic [1:0] need0, need1;
     always_comb begin
         need0 = 2'd0; need1 = 2'd0;
@@ -148,14 +149,12 @@ module poe_thsch #(
             automatic logic [7:0] dc = csr_dma_c[tid0*8 +: 8];
             if (cb.c0 && dc[cb.dma_id0]) need0 = need0 + 2'd1;
             if (cb.vld_cu && cb.c1 && dc[cb.dma_id1]) need0 = need0 + 2'd1;
-            if (need0 == 2'd0) need0 = 2'd1;
         end
         if (iss1 && b1.burst_type) begin
             automatic burst_c_t cb = ready_burst[tid1*BURST_W +: BURST_W];
             automatic logic [7:0] dc = csr_dma_c[tid1*8 +: 8];
             if (cb.c0 && dc[cb.dma_id0]) need1 = need1 + 2'd1;
             if (cb.vld_cu && cb.c1 && dc[cb.dma_id1]) need1 = need1 + 2'd1;
-            if (need1 == 2'd0) need1 = 2'd1;
         end
     end
 
@@ -245,18 +244,7 @@ module poe_thsch #(
                             ct_excl[idx] = 1'b1;
                         end
                     end
-                    if (!t0 && !t1) begin // 空 c_task：占位 task（保 done 路径）
-                        automatic cw_entry_t ce = csr_cw[tid0*384 +: 384][cb.dma_id0*48 +: 48];
-                        idx = ct_free_idx(0, ct_excl);
-                        if (idx >= 0) begin
-                            ct_mem[idx] <= {ready_pri[tid0*3 +: 3], tid0[5:0],
-                            ready_burst_tidx[tid0*4 +: 4],
-                            ready_burst_ts[tid0*TS_ID_W +: TS_ID_W], cb.dma_id0,
-                            2'd0, 1'b0};
-                            ct_vld_r[idx] <= 1'b1;
-                            ct_excl[idx] = 1'b1;
-                        end
-                    end
+                    // 空 c_task（t0/t1 均无效）：不入缓存、无 done（THM 按 th_dneed 推进）
                 end
             end
             // ---- winner1：i/v → q1；c_task → c_task 缓存（继续 winner0 的 excl） ----
@@ -302,18 +290,7 @@ module poe_thsch #(
                             ct_excl[idx] = 1'b1;
                         end
                     end
-                    if (!t0 && !t1) begin
-                        automatic cw_entry_t ce = csr_cw[tid1*384 +: 384][cb.dma_id0*48 +: 48];
-                        idx = ct_free_idx(0, ct_excl);
-                        if (idx >= 0) begin
-                            ct_mem[idx] <= {ready_pri[tid1*3 +: 3], tid1[5:0],
-                            ready_burst_tidx[tid1*4 +: 4],
-                            ready_burst_ts[tid1*TS_ID_W +: TS_ID_W], cb.dma_id0,
-                            2'd0, 1'b0};
-                            ct_vld_r[idx] <= 1'b1;
-                            ct_excl[idx] = 1'b1;
-                        end
-                    end
+                    // 空 c_task（t0/t1 均无效）：不入缓存、无 done（THM 按 th_dneed 推进）
                 end
             end
         end

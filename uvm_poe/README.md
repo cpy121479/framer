@@ -10,7 +10,11 @@
   （`out_vld/out_pri/out_src(=优先级组号)/out_stream/out_cid/out_pos/pre_read`）。
 - **THM**：保序（同 `(stream,cid,pos)` 活跃线程 → 8 深缓存 FIFO 放行；不能建线程
   且缓存满才 `ko_rdy=0`）+ 线程状态机（IDLE→READY→ISSUED→DONE）+ CSR + ts 级互斥锁
-  （16 个，仅一级发射阻塞）；线程描述从模板池随机取（9 个模板 T0~T8，每 ts ≤8 burst）。
+  （16 个，仅一级发射阻塞）；线程描述从模板池随机取（10 个模板 T0~T9，每 ts ≤8 burst）。
+  ts 完成按预期 done 事件数（th_dneed）判定：i/v burst 计 1、c_task 按有效 task 数计，
+  空 c_task burst 计 0（不入缓存、不占 DSE 机会，无事件 ts 由 THM 每拍兜底推进）。
+  跳转边界（ts 末条 burst + 下一 ts_id 不连续）发射后等待 4+t 拍（t 随机，建模
+  完成反馈 + 跳转竞争）。
 - **th_sch（一级发射）**：全局按 `(pri, tid)` 取前 2（同锁 loc 同拍互斥）；
   q0/q1 槽池（8 深）**仅存 i/v burst**（槽项含 pri）；c_task burst 解析出有效
   c_task（c0/c1 + dma_c，cw 解析 tag/op，含 ts）入独立 16 深缓存（满则反压）。
@@ -90,7 +94,7 @@ TESTNAME=koa_smoke_test RUN_US=30 N_OH_PLANES=4 OH_SLOTS=9520 \
 uvm_poe/
 ├─ rtl/
 │  ├─ poe_types.sv        # 共享类型包：burst(38b)/csr_t(614b)/cw/C 窗类型（保留定义）
-│  ├─ poe_thread_tpl.sv   # 线程模板池（T0~T8，每 ts ≤8 burst，ts_id 可跳变）
+│  ├─ poe_thread_tpl.sv   # 线程模板池（T0~T9，每 ts ≤8 burst，ts_id 可跳变）
 │  ├─ koa.sv              # KOA：5×SBUF×8 段 + SP/RR 调度
 │  ├─ poe_thm.sv          # THM：线程池(64)/保序(8)/CSR/ts 级锁/done 聚合(2EU+4DSE)
 │  ├─ poe_thsch.sv        # th_sch：全局(pri,tid)取 2；q0/q1 存 i/v，c_task 解析入缓存

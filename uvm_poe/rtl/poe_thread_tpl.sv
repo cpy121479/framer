@@ -14,7 +14,8 @@
 //   cw          CSR cw：c_task 操作表（8×6B，条目 48bit）
 //
 // 模板覆盖场景：短 i/v、混合 i/v+c_task、长线程+ts_id 跳变、DMA 密集、
-// 单段持锁、双段持锁（ts 级互斥锁：lock_req/unlock_req 仅 ts 首个 burst 生效）。
+// 单段持锁、双段持锁（ts 级互斥锁：lock_req/unlock_req 仅 ts 首个 burst 生效）、
+// 空 c_task（无有效任务，不产生 done，ts 推进不依赖 dma_ctrl）。
 // ============================================================================
 package poe_thread_tpl_pkg;
 
@@ -35,7 +36,7 @@ package poe_thread_tpl_pkg;
         logic [383:0] cw; // 8×6B
     } thread_tpl_t;
 
-    localparam int N_TPL = 9; // 模板数量（T0..T8）
+    localparam int N_TPL = 10; // 模板数量（T0..T9）
 
     // ==================== 辅助构造函数 ====================
 
@@ -457,6 +458,33 @@ package poe_thread_tpl_pkg;
         tpl_hp_mix = t;
     endfunction
 
+    // ---- T9：空 c_task 线程（4 ts。dma_c=0x00 → 全部 c_task 无效：
+    // ts1 = iv+空 c（dneed=1，仅 iv 回 done）；ts2 = 单空 c（dneed=0，
+    // 无任何 done 事件，验证 THM 每拍兜底推进、空 c 不入缓存/不占 DSE 机会）） ----
+    function automatic thread_tpl_t tpl_empty_c();
+        thread_tpl_t t;
+        t = '0;
+        t.ts_cnt = 5'd4;
+        t.pri = 3'd2;
+        t.ts_bs[3:0] = 4'd1;
+        t.ts_bs[7:4] = 4'd2;
+        t.ts_bs[11:8] = 4'd1;
+        t.ts_bs[15:12] = 4'd1;
+        t.ts_id[5:0] = 6'd0;
+        t.ts_id[11:6] = 6'd1;
+        t.ts_id[17:12] = 6'd2;
+        t.ts_id[23:18] = 6'd3;
+        tpl_put_ts(t, 0, tpl_iv(1'b1, 3'd1, 1'b0, 1'b0, 3'd0), '0, '0, '0);
+        tpl_put_ts(t, 1, tpl_iv(1'b1, 3'd2, 1'b0, 1'b0, 3'd1),
+                        tpl_c(1'b0, 3'd6, 8'd4), '0, '0); // 空 c（dma6 被 dma_c 屏蔽）
+        tpl_put_ts(t, 2, tpl_c(1'b1, 3'd6, 8'd4), '0, '0, '0); // 单空 c（dneed=0）
+        tpl_put_ts(t, 3, tpl_iv(1'b1, 3'd1, 1'b1, 1'b0, 3'd3), '0, '0, '0);
+        t.vtsk_c = 8'hFF;
+        t.dma_c = 8'h00; // 全部 c_task 无效（cw 不使用）
+        t.cw = '0;
+        tpl_empty_c = t;
+    endfunction
+
     // 按索引取模板（越界回退到 T0）
     function automatic thread_tpl_t tpl_get(input int idx);
         case (idx)
@@ -469,6 +497,7 @@ package poe_thread_tpl_pkg;
             6: tpl_get = tpl_hp_c();
             7: tpl_get = tpl_hp_iv();
             8: tpl_get = tpl_hp_mix();
+            9: tpl_get = tpl_empty_c();
             default: tpl_get = tpl_short_iv();
         endcase
     endfunction
