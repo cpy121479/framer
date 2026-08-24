@@ -406,7 +406,7 @@ module poe_thm #(
                     csr[t].th_id <= t[7:0];
                     csr[t].th_stat <= T_READY;
                     csr[t].o_mes <= 8'd0;
-                    csr[t].cur_ts <= 8'd0;
+                    csr[t].cur_ts <= tid_vec[TS_ID_W-1:0]; // 初始 = ts_id[0]（与 th_cur_ts 一致）
                     csr[t].vtsk_c <= vtsk;
                     csr[t].dma_c <= dc;
                     csr[t].tw <= 64'd0;

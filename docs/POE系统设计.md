@@ -71,7 +71,7 @@ burst_sch（二级发射：q0→EU0 / q1→EU1 各自按优先级选；4 个 DSE
 | unlock_req / lock_req | 1bit ×2 | ts 级解锁 / 加锁请求 |
 | st | 1bit | 是否为所属 ts 首个 burst |
 | tr | 1bit | 是否涉及 O 窗操作 |
-| ts_len / rev | 3bit / 4bit | i/v 所属 ts burst 数 / c 保留 |
+| ts_len / rev | 3bit / 4bit | i/v 预留（3bit 上限 7，当前未消费；每 ts burst 数以模板 ts_bs 为准）/ c 保留 |
 | branch | 1bit | 仅 i/v：预留（可能跳转）；真实跳转由模板 ts_id 不连续标记 |
 | burst_type / vld_cu | 1bit ×2 | 类型 / 需执行 task 数 |
 | tsk_id / dma_id | 3bit ×2 | 任务 id（查 CSR.vtsk_c / dma_c） |
@@ -82,8 +82,9 @@ burst_sch（二级发射：q0→EU0 / q1→EU1 各自按优先级选；4 个 DSE
 
 - 线程 = 若干 ts（1..16，编号可跳转），每个 ts = 若干 burst（1..8）；
 - ts0 固定 1 个单 i_task burst；
-- 同一配对（同 tag）的 c_task 存在先后依赖，分处**不同 ts**，
-  顺序由 burst_sch 的 `ts == cur_ts` 检查保证；不同配对相互独立，无先后要求；
+- 同一配对（同 tag）的 c_task 无数据通路依赖（发射即 done），可同 ts 或跨 ts：
+  同 ts 内按 c_task 缓存槽号 tie-break 顺序发射（th_sch 按最低空闲槽写入、
+  DSE 同优先级取槽号小者）；跨 ts 时受 burst_sch 的 `ts == cur_ts` 门控；
 - burst 的 `branch`（br）为**预留**标记（可能跳转）；真实跳转由模板的
   `ts_id` 不连续标记（带 br 的 ts 其后 ts_id 跳变）；
 - 每 ts 首个 burst（st=1）可声明 ts 级锁操作；
@@ -143,7 +144,8 @@ C 窗结构（`c_wnd_entry_t`，168bit：`tag(20)/c_line(128)/d/o/r/cnt(9)/ind(8
 ### 5.2 保序
 
 - 新报文若同 key 已有活跃线程 → 入 8 深缓存等待（FIFO 放行）；
-- 缓存满 / 线程池满 → `ko_rdy=0` 反压；
+- 反压条件：**不能建线程**（线程池满或同 key 活跃）**且缓存已满** → `ko_rdy=0`；
+  池满但缓存未满时照收（报文入缓存等待）；
 - 缓存放行拍专用于缓存建线程，并对 KOA 拉 1 拍反压。
 
 ### 5.3 建线程（模板池）
@@ -151,6 +153,10 @@ C 窗结构（`c_wnd_entry_t`，168bit：`tag(20)/c_line(128)/d/o/r/cnt(9)/ind(8
 - 线程描述从模板池随机选取：`tpl = tpl_get($urandom % N_TPL)`；
 - 解出 ts_cnt / 每 ts burst 数 / ts 编号 / pri / burst 模式 / vtsk_c / dma_c / cw；
 - 同步生成 CSR 表项（th_stat=T_READY、cur_ts=ts_id[0] 等）。
+
+**pre_read 转发**：带预读的 KO 建线程时，同拍把 4 组 `{pre_vld, pre_tid,
+pre_dma_addr, pre_op}` 转发给 burst_sch 的 8 深 pre_buf（占位，吸收不执行）；
+`pre_buf_rdy=0`（快满）时带预读 KO 反压（`ko_rdy=0`），无预读 KO 不受影响。
 
 ### 5.4 一级发射门控（ready_mask）
 
@@ -183,6 +189,8 @@ th_need[ts] / th_off / th_sel_ts / th_sel_idx`。
   c_task burst 解析出有效 c_task（c0/c1 + dma_c 判有效、cw 解析 tag/op），
   存入独立 c_task 缓存（16 深槽池），满则反压 c_task 发射；
 - 槽池无先后关系：二级发射按优先级选任意有效槽，ack 逐槽清空；
+- 空 c_task burst（无有效任务）推 1 个占位 task（tag=0/op=0）入缓存，
+  保证 dma 回 done（THM cur_ts 依赖）；
 - 完成反馈携带 ts_idx（发射时随 burst 下发）。
 
 ## 7. burst_sch（二级发射）
@@ -195,7 +203,8 @@ th_need[ts] / th_off / th_sel_ts / th_sel_idx`。
   优先级选 `tag==DSE` 且 `ts == cur_ts` 的最高优先项，每拍最多 4 个
   （每 DSE 1 个）；**发射即完成**——done 由二级发射寄存 1 拍直接返回 THM，
   发射的 c_task 推入 dma_ctrl 对应 DSE 的 c_task FIFO，**FIFO 满时反压该 DSE
-  发射**（槽保留，下拍重选）；`ts==cur_ts` 保证同配对 loc/free 的先后顺序；
+  发射**（槽保留，下拍重选）；`ts == cur_ts` 门控跨 ts 顺序，同 ts 内按缓存
+  槽号 tie-break 发射序；
 - 无需资源预检/冲突检查：同地址互斥由 THM 锁在一级发射保证。
 
 ## 8. CU / EU
@@ -260,7 +269,7 @@ c_task 留在缓存下拍重选）；每个 FIFO 每拍出队 1 个（模型化�
 ## 12. 待细化项
 
 - CU 真实语义（vtsk_c 判定 / I_BUF_B 子指令）与 O 窗设计；
-- pre_read 预读执行语义（当前 dma_ctrl 接收即吸收）；
+- pre_read 预读执行语义（当前 THM 建线程拍转发 → burst_sch 8 深 pre_buf 占位吸收）；
 - SMC/RBA 总线握手与深度；
 - CSR 的 err/ccr/o_mes/tw 语义；
 - 线程模板池与锁模板的最终方案（当前 9 个模板 T0~T8，两套模板库待统一）。
