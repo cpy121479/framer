@@ -8,7 +8,7 @@
 //   READY ≠ 回 IDLE：回 READY 后可发射下一个 burst（不限同一 ts），bs_pc 跨 ts 连续推进；
 //   cur_ts 仅由 cu_done/dma_done 统计推进，一级队列可含 cur_ts 及更靠后 ts 的 burst
 // - 建线程时同步生成 CSR 表项（csr_t，th_id 6bit、cw 8×6B），th_stat/cur_ts 与状态机
-//   同步；dma_c/cw 暴露给 dma_ctrl / burst_sch（c_task 按 dma_id 查询）
+//   同步；dma_c/cw 暴露给 th_sch（解析 c_task 时按 dma_id 查询，只读）
 // - pre_read 转发：带预读 KO 建线程时同拍把 4 组 {vld, tid, dma_addr, op} 转发给
 //   burst_sch 的 8 深 pre_buf（占位吸收，不执行/不回 done）；pre_buf 快满时
 //   pre_buf_rdy=0，带预读 KO 反压（ko_rdy=0）
@@ -198,7 +198,7 @@ module poe_thm #(
     assign pre_dma_addr = thread_cre_ok ? src_pre_addr : 80'd0;
     assign pre_op = thread_cre_ok ? src_pre_op : 4'd0;
 
-    // ---- CSR 暴露（burst_sch 按 tid+dma_id 查询） ----
+    // ---- CSR 暴露（th_sch 按 tid+dma_id 查询） ----
     always_comb begin
         for (int i = 0; i < MAX_THREADS; i++) begin
             csr_dma_c[i*8 +: 8] = csr[i].dma_c;
