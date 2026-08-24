@@ -1,18 +1,19 @@
 // ============================================================================
 // POE THM（线程管理器）行为模型 v5
-// - 线程 = 若干 ts，每个 ts = 若干 burst；burst 为 32bit 一种结构两种类型
+// - 线程 = 若干 ts，每个 ts = 若干 burst；burst 为 38bit 一种结构两种类型
 //   （burst_iv_t / burst_c_t，burst_type 区分，字段重叠复用，见 poe_types_pkg）
 // - 保序在 THM：新 KO 报文查自身线程池，同 (stream,cid,pos) 活跃线程（非 IDLE）则
-//   存入 8 深报文缓存等待；前序线程释放后按 FIFO 放行；缓存满/线程满反压 ko_rdy
+//   存入 8 深报文缓存等待；前序线程释放后按 FIFO 放行；不能建线程且缓存满才反压 ko_rdy
 // - 线程状态机：IDLE→READY→ISSUED→DONE（WAIT 并入 ISSUED 打拍）
 //   READY ≠ 回 IDLE：回 READY 后可发射下一个 burst（不限同一 ts），bs_pc 跨 ts 连续推进；
 //   cur_ts 仅由 cu_done/dma_done 统计推进，一级队列可含 cur_ts 及更靠后 ts 的 burst
 // - 建线程时同步生成 CSR 表项（csr_t，th_id 6bit、cw 8×6B），th_stat/cur_ts 与状态机
 //   同步；dma_c/cw 暴露给 dma_ctrl / burst_sch（c_task 按 dma_id 查询）
-// - pre_read 插队：KO 带 pre_read 时直接注入一条 c_task burst（不建线程/不查保序），
-//   靠 burst 队列项 pre 标志区分（th_id 无保留值）；预读接口 pre_mes 4 组，模型占位单路
-// - C 窗每线程独享、无 loc/free 生命周期：dma_ctrl 只读 cw 执行 RBA 读/写，
-//   不回写 CSR.cw；锁（ts 级）仅用于一级发射互斥，状态只在此维护
+// - pre_read 转发：带预读 KO 建线程时同拍把 4 组 {vld, tid, dma_addr, op} 转发给
+//   burst_sch 的 8 深 pre_buf（占位吸收，不执行/不回 done）；pre_buf 快满时
+//   pre_buf_rdy=0，带预读 KO 反压（ko_rdy=0）
+// - C 窗类型保留定义、RTL 未实例化；dma_ctrl 只做 4 个 c_task FIFO 缓冲，
+//   RBA 为独立读写机会计数；锁（ts 级）仅用于一级发射互斥，状态只在此维护
 // ============================================================================
 module poe_thm #(
     parameter int MAX_THREADS = 64,
@@ -63,11 +64,9 @@ module poe_thm #(
     output logic [23:0] pre_tid, // 4×6bit（= 新建线程 tid）
     output logic [79:0] pre_dma_addr,
     output logic [3:0] pre_op,
-    // ---- CSR 暴露（c_task 按 dma_id 查询）：dma_c → burst_sch/dma_ctrl；cw → dma_ctrl ----
+    // ---- CSR 暴露（th_sch 解析 c_task 用）：dma_c 任务掩码 / cw 操作表（只读） ----
     output logic [MAX_THREADS*8-1:0] csr_dma_c,
-    output logic [MAX_THREADS*384-1:0] csr_cw,
-    output logic [7:0] pre_dma_c,
-    output logic [255:0] pre_cw
+    output logic [MAX_THREADS*384-1:0] csr_cw
     );
 
     import poe_types_pkg::*;
@@ -75,7 +74,7 @@ module poe_thm #(
 
     typedef enum logic [1:0] { T_IDLE, T_READY, T_ISSUED, T_DONE } state_t;
 
-    // pre_read 插队 burst 无线程归属：th_id 6bit 无保留值，靠 burst 队列项 pre 标志区分
+    // pre_read：带预读 KO 建线程时转发给 burst_sch pre_buf（占位吸收，无线程归属/无 done）
 
     state_t th_state [MAX_THREADS];
     logic [TS_W-1:0] th_ts_n [MAX_THREADS];
@@ -108,7 +107,7 @@ module poe_thm #(
     localparam int TS_ID_VEC_W = MAX_TS * TS_ID_W; // 每 ts 编号向量
     localparam int BS_W = MAX_TS * 4; // 每 ts burst 数向量（16×4bit，0..8）
     localparam int PR_W = 3;
-    localparam int BURST_PAT_W = MAX_TS * MAX_BURST * BURST_W; // 4ts×4×32bit
+    localparam int BURST_PAT_W = MAX_TS * MAX_BURST * BURST_W; // 16×8×38bit
     localparam int DMA_C_W = 8;
     localparam int CW_W = 384;
     // 预读字段（随报文缓存）：{pre_vld(4), dma_addr(80), op(4)}
@@ -198,9 +197,6 @@ module poe_thm #(
     assign pre_tid = thread_cre_ok ? {4{find_idle()[5:0]}} : 24'd0;
     assign pre_dma_addr = thread_cre_ok ? src_pre_addr : 80'd0;
     assign pre_op = thread_cre_ok ? src_pre_op : 4'd0;
-
-    assign pre_dma_c = 8'd0; // 旧插队路径废弃（burst_sch q_pre 恒 0）
-    assign pre_cw = '0;
 
     // ---- CSR 暴露（burst_sch 按 tid+dma_id 查询） ----
     always_comb begin

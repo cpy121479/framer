@@ -1,41 +1,39 @@
-# uvm_poe —— KOA 调度 + POE THM/th_sch/burst_sch/CU 桩行为模型平台（v5）
+# uvm_poe —— KOA 调度 + POE THM/th_sch/burst_sch/EU/dma_ctrl/RBA 行为模型平台
 
 ## 目的
 
-模拟 **KOA → POE THM → th_sch → burst_sch → CU/EU 桩 + dma_ctrl 桩** 链路：
+模拟 **KOA → POE THM → th_sch → burst_sch → EU 桩 + dma_ctrl（c_task FIFO）/ RBA** 链路：
 
 - **KOA**：7 条 KO 输入流（5 条 fgOTN/X2X 流带 cid/pos + 2 条串口流），写入
-  **5 个独立 SBUF**（EXT/INS/ALM/UART_EXT/UART_INS，每个 SBUF 深度 2560，地址按
-  pri 拆成 8 段，每段 320 深 FIFO）；**同段合并向量写**：同段同拍可写多条
-  （`MAX_WR_SEG` 上限），写入顺序固定 APS 类（编小优先）→ OH 类（编小优先），
-  空间不足时排在后面的让位（rdy=0、vld 保持不丢）。
-  调度为 **组间 SP + 组内 RR**：每拍先选最小编号非空优先级组（0 最高），组内按
-  `rr_ptr`（每拍推进）轮询 5 个 SBUF、取最先非空段出队，每拍输出 1 条，输出带
-  `out_stream/out_cid/out_pos`。
-- **保序在 THM**：新 KO 报文查 THM 线程池，同 `(stream,cid,pos)` 活跃线程（非 IDLE）则
-  存入 **8 深报文缓存**等待，前序线程释放后按 FIFO 放行；缓存满/线程满 → `ko_rdy=0` 反压。
-- **POE THM**：线程 = 若干 ts，每 ts 若干 burst；burst 为正式结构 **32bit 一种结构两种
-  类型**（burst_type 区分，字段重叠）：st/tr/ts_len/branch/rev/burst_type/vld_cu/
-  tsk_id0/1+c0/1+sub_pc0/1（i/v）/dma_id0/1+occ_ts0/1（c_task）。
-  状态机 IDLE→READY→ISSUED→DONE（WAIT 并入 ISSUED 打拍）；**READY ≠ 回 IDLE**——
-  回 READY 后可发射下一个 burst，不限制同一 ts；`bs_pc` 跨 ts 连续打拍推进，
-  `cur_ts` 仅由 **cu_done 统计**推进，一级发射队列可含 cur_ts 及更靠后 ts 的 burst。
-  KO 带 **pre_read** 时直接向 burst 队列插队注入一条 c_task burst（不建线程/不查保序）。
-  建线程时同步生成 **CSR 表项**（err/ccr/sys_ts/th_id(6b)/th_stat/o_mes/cur_ts/vtsk_c/
-  dma_c/tw/cw(8×6B)），逐步替换临时字段（th_stat/cur_ts 已同步）。
-- **th_sch**：按 (pri, tid) 排序固定发射 ≤2（同 pri tid 小优先，不足从次低补）。
-- **burst_sch**：二级发射，**每拍 ≤2 个**（q0/q1 各自独立判断队头）；公共条件 =
-  `q.ts==cur_ts` 且无 O 窗反压（`tr`）；c_task（`burst_type=1`）按 c0/c1+CSR.dma_c 判
-  有效任务数 N，**C 窗资源池可用**才放行（FIFO 空闲 ≥ N 且线程占用 + N ≤ 4）；
-  路由：i/v_task → **CU0/CU1 两个单元**（q0→CU0、q1→CU1），c_task → dma_ctrl
-  （dma 单路，两路 c_task 同拍只发 q0）。
-- **CU 桩 ×2**：CU0/CU1 各 LATENCY 后回 `cu_done + tid`（vtsk_c 判定未实现）；
-  THM 聚合三路 done（cu0/cu1/dma）按 tid 推进 cur_ts（支持同 tid 同拍多 done、跨 ts）。
-- **dma_ctrl**：完整 c_task 执行（loc/free）——loc 3 拍查 C 窗（命中存 16 深指令预存；
-  未命中申请 C 窗资源、写 168bit 资源条目、更新 CSR.cw、RBA 读 SMC 回填 c_line）；
-  free 同拍同地址去重、RBA 写回 SMC、释放资源并查指令预存转交；256 深 FIFO 管理
-  资源（单线程上限 4），线程结束兜底归还；pre 插队不占资源；burst 执行完回一次
-  `dma_done`（THM cur_ts 推进）。
+  **5 个独立 SBUF**（EXT/INS/ALM/UART_EXT/UART_INS，每个深度 2560，按 pri 拆 8 段、
+  每段 320 深）；同段合并向量写（上限 16）；调度为组间 SP + 组内 RR，每拍输出 1 条
+  （`out_vld/out_pri/out_src(=优先级组号)/out_stream/out_cid/out_pos/pre_read`）。
+- **THM**：保序（同 `(stream,cid,pos)` 活跃线程 → 8 深缓存 FIFO 放行；不能建线程
+  且缓存满才 `ko_rdy=0`）+ 线程状态机（IDLE→READY→ISSUED→DONE）+ CSR + ts 级互斥锁
+  （16 个，仅一级发射阻塞）；线程描述从模板池随机取（9 个模板 T0~T8，每 ts ≤8 burst）。
+- **th_sch（一级发射）**：全局按 `(pri, tid)` 取前 2（同锁 loc 同拍互斥）；
+  q0/q1 槽池（8 深）**仅存 i/v burst**（槽项含 pri）；c_task burst 解析出有效
+  c_task（c0/c1 + dma_c，cw 解析 tag/op，含 ts）入独立 16 深缓存（满则反压）。
+- **burst_sch（二级发射）**：无头阻，按优先级选任意有效槽；
+  i/v：q0→EU0、q1→EU1 各自独立调度（`ts==cur_ts`、非 O 窗反压）；
+  c_task：4 个 DSE 调度器（DSE==tag 0..3）各选最高优先且 `ts==cur_ts` 的项，
+  **发射即完成**（done 寄存 1 拍回 THM），c_task 推入 dma_ctrl 对应 DSE 的 FIFO，
+  FIFO 满时反压该 DSE。
+- **EU 桩 ×2**：各含 4 个 CU 桩（≤2 task 分发给 CU0/CU1，CU2/CU3 预留），
+  全部完成后聚合回 1 个 `eu_done`（按 burst 计）。
+- **dma_ctrl**：4 个 c_task FIFO（每 DSE 1 个，8 深，存 `{tid,tidx,dma_id,tag,op}`），
+  每拍各出队 1 个（模型化消化腾空间）。
+- **RBA**：4 个读写机会计数（初始 64）；dma 出队 1 个 c_task = 1 次读/写请求 →
+  计数 -1，70~75 拍后归还 +1；计数为 0 反压（停止出队 → FIFO 满 → 二级发射反压）。
+- **br 字段预留**：真实 ts 跳转由模板 `ts_id` 不连续标记。
+
+## 数据结构要点
+
+- **burst 38bit**：一种结构两种类型（`burst_type`：0=i/v、1=c_task），字段按类型复用；
+  锁字段（lock_id/lock_req/unlock_req）仅 ts 首个 burst（st=1）生效；`branch`（br）预留。
+- **CSR（每线程，614bit）**：err/ccr/sys_ts/th_id(6b)/th_stat/o_mes/cur_ts/vtsk_c/
+  dma_c/tw/cw(8×6B)；cw 由模板初始化，th_sch 解析时只读，dma_ctrl 不回写。
+- **c_task 缓存项**：`{pri, tid, tidx, ts, dma_id, tag, op}`（16 深）。
 
 ## 通道时隙表
 
@@ -67,7 +65,7 @@
 | `MAX_THREADS`（RTL） | 64 | THM 线程数 |
 | `BUF_DEPTH`（RTL） | 8 | THM 保序报文缓存深度 |
 | `SBUF_DEPTH`（RTL） | 2560 | KOA 每个 SBUF 总深度（拆 8 个 pri 段，每段 320） |
-| `MAX_WR_SEG`（RTL） | 16 | KOA 每段每拍合并写入条数上限（8 APS + 4 OH 同段最坏 12） |
+| `MAX_WR_SEG`（RTL） | 16 | KOA 每段每拍合并写入条数上限 |
 
 ## 运行
 
@@ -79,30 +77,29 @@ TESTNAME=koa_smoke_test RUN_US=30 N_OH_PLANES=4 OH_SLOTS=9520 \
 
 ## 验证
 
-- KOA scoreboard：5×SBUF×8 段参考模型（同拍 OUT 先 IN、rr 按拍推进对齐 DUT），
-  比对优先级组号/48B 数据，校验数量守恒与队列清空。
-- 实测（200µs，UART 60Mpps）：输入 39200 = 输出 39200，错配 0，UVM_ERROR 0；
-  压测（30µs，UART 120Mpps）：输入 8249 = 输出 8249，错配 0，UVM_ERROR 0。
-- THM 链路（同场景）：线程内 16327 个 burst 全部发射→完成一一对应（EMIT_CU 12633 +
-  EMIT_DMA 3694 = DONE 12633 + DONE_DMA 3694）；pre_read 插队 319 条经 EMIT_DMA 到
-  dma_ctrl；队列无 cur_ts 以前的 burst；C 窗资源池申请=归还（FINAL f_cnt=256）无死锁
-  （CBLOCK=0）。
-- 每次仿真报告各流反压事件/拍数。
+- KOA scoreboard：5×SBUF×8 段参考模型（SP+RR），比对优先级组号/输出顺序，
+  校验数量守恒与队列清空（输入=输出、错配 0、UVM_ERROR 0）。
+- POE 链路：FINAL 校验全部线程回 IDLE（idle=64）；完成事件（eu/dma done）与发射
+  一一对应；每次仿真报告 RBA 反压拍数、c_task FIFO 满拍数、ct 缓存峰值/满事件、
+  q0/q1 槽池峰值。
 - THM 保序缓存/线程状态的断言级 UVM 验证为后续扩展（当前靠事件日志与守恒检查）。
 
 ## 目录结构
 
 ```text
 uvm_poe/
-├─ rtl/poe_types.sv   # 共享类型包：burst_t（48b）/ csr_t（61B）
-├─ rtl/koa.sv          # KOA：8 优先级队列 + SP/组内 FIFO，输出带 stream/cid/pos
-├─ rtl/poe_thm.sv      # THM：线程池(64) + 保序检查 + 8 深缓存 + bs_pc/cur_ts 状态机
-├─ rtl/poe_thsch.sv    # th_sch：按(pri,tid)选≤2 一级发射 + 2×burst 队列(深8)
-├─ rtl/poe_burstsch.sv # burst_sch：二级发射（ts一致+O窗反压+C窗查询，按类型路由 CU/dma）
-├─ rtl/poe_cu_stub.sv  # CU 桩：延迟1拍执行完
-├─ rtl/poe_dma_ctrl_stub.sv # dma_ctrl 桩：c_task 执行，回 dma_done
-├─ tb/koa_if.sv, tb_top.sv
-├─ uvm/                # ko_pkg / item / seq（时隙表随机生成）/ agent / scoreboard / tests
-├─ sim/                # filelist.f、run_verilator.sh/.bat
-└─ tools/              # 复用已打补丁的 uvm-core + Verilator 链接修复
+├─ rtl/
+│  ├─ poe_types.sv        # 共享类型包：burst(38b)/csr_t(614b)/cw/C 窗类型（保留定义）
+│  ├─ poe_thread_tpl.sv   # 线程模板池（T0~T8，每 ts ≤8 burst，ts_id 可跳变）
+│  ├─ koa.sv              # KOA：5×SBUF×8 段 + SP/RR 调度
+│  ├─ poe_thm.sv          # THM：线程池(64)/保序(8)/CSR/ts 级锁/done 聚合(2EU+4DSE)
+│  ├─ poe_thsch.sv        # th_sch：全局(pri,tid)取 2；q0/q1 存 i/v，c_task 解析入缓存
+│  ├─ poe_burstsch.sv     # burst_sch：i/v 双调度 + 4×DSE 调度器；c_task 发射即 done
+│  ├─ poe_eu_stub.sv      # EU 桩：4 个 CU 桩，聚合回 1 个 eu_done
+│  ├─ poe_dma_ctrl.sv     # 4 个 c_task FIFO（满反压二级发射）
+│  └─ poe_rba.sv          # 4 个读写机会计数（64，70~75 拍归还）
+├─ tb/                    # koa_if.sv、tb_top.sv
+├─ uvm/                   # ko_pkg / item / seq / agent / scoreboard / tests
+├─ sim/                   # filelist.f、run_verilator.sh
+└─ tools/                 # 复用已打补丁的 uvm-core + Verilator 链接修复
 ```

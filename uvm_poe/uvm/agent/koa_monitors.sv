@@ -90,7 +90,7 @@ class koa_in_monitor extends uvm_monitor;
     endfunction
 endclass
 
-// 输出 monitor：采样 out_vld，携带 out_src（0=EXT 1=INS 2=ALM 3=UART_EXT 4=UART_INS）
+// 输出 monitor：采样 out_vld，携带 out_src（= 优先级组号 0..7，scoreboard 按组 SP+RR 比对）
 class koa_out_monitor extends uvm_monitor;
     uvm_analysis_port #(koa_item) ap;
     `uvm_component_utils(koa_out_monitor)

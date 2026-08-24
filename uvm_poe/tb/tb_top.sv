@@ -89,8 +89,6 @@ module tb_top;
     logic [15:0] ct_ack;
     logic [511:0] csr_dma_c;
     logic [24575:0] csr_cw;
-    logic [7:0] pre_dma_c;
-    logic [255:0] pre_cw;
     logic owin_bp;
     // ---- EU（2 个，各含 4 个 CU 桩）----
     logic emit_eu_vld0, eu0_ack;
@@ -143,9 +141,7 @@ module tb_top;
     .pre_vld(pre_vld), .pre_tid(pre_tid),
     .pre_dma_addr(pre_dma_addr), .pre_op(pre_op),
     .csr_dma_c(csr_dma_c),
-    .csr_cw(csr_cw),
-    .pre_dma_c(pre_dma_c),
-    .pre_cw(pre_cw)
+    .csr_cw(csr_cw)
     );
 
     poe_thsch #(.MAX_THREADS(64)) u_thsch (

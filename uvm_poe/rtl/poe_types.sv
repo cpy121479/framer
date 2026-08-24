@@ -62,7 +62,7 @@ package poe_types_pkg;
 
     localparam int BURST_W = 38;
 
-    // ---- CSR 表项（61B = 488bit）：建线程时同步生成 ----
+    // ---- CSR 表项（614bit ≈ 77B）：建线程时同步生成 ----
     typedef struct packed {
         logic [7:0] err; // 1B：线程错误指示（默认 0，刷新条件待定）
         logic [63:0] ccr; // 8B：待定
