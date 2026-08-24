@@ -1,6 +1,6 @@
 # POE 系统设计（当前版）
 
-> 本文档基于 `uvm_poe` 当前实现（KOA + POE THM/th_sch/burst_sch/CU/dma_ctrl 行为模型）
+> 本文档基于 `uvm_poe` 当前实现（KOA + POE THM/th_sch/burst_sch/EU/dma_ctrl 行为模型）
 > 整理，作为全链路完整设计说明。历史文档已归档至 `docs/archive/`。
 >
 > 核心简化：链路不再承载 48B KO 报文，只传递有效信息（优先级/流/通道/位置/预读）；
@@ -15,7 +15,7 @@ POE（Packet Overhead Engine）核处理 fgOTN 业务数据流中的开销指令
 - KOA 多业务源（fgOTN OH / X2X APS/ALM / 串口）的优先级调度与不丢报文；
 - THM 的保序、线程生命周期、ts 级互斥锁与 CSR 维护；
 - th_sch / burst_sch 两级发射调度；
-- CU（计算）与 dma_ctrl（DMA / C 窗缓存）执行模型。
+- EU（计算）与 dma_ctrl（c_task FIFO / RBA）执行模型。
 
 **关键设计决策**
 
@@ -24,7 +24,7 @@ POE（Packet Overhead Engine）核处理 fgOTN 业务数据流中的开销指令
 | 无 KO 数据 | 激励/KOA/THM 均不承载 48B 报文，只传有效信息（pri/stream/cid/pos/预读） |
 | 线程模板池 | THM 建线程时从模板池随机取线程描述（ts 结构/burst 模式/CSR 初值） |
 | ts 级互斥锁 | burst 描述声明 lock/unlock（仅 ts 首个 burst 生效），同锁线程互斥执行 |
-| dma_ctrl 简化 | 无 C 窗 loc/free 生命周期：只做 RBA 读/写；同地址互斥由 THM 锁在一级发射保证 |
+| dma_ctrl 简化 | 无 C 窗 loc/free 生命周期/无执行单元：4 个 c_task FIFO 缓冲 + RBA 读写机会；done 由二级发射返回 |
 
 ## 2. 系统架构与数据流
 
@@ -82,9 +82,10 @@ burst_sch（二级发射：q0→EU0 / q1→EU1 各自按优先级选；4 个 DSE
 
 - 线程 = 若干 ts（1..16，编号可跳转），每个 ts = 若干 burst（1..8）；
 - ts0 固定 1 个单 i_task burst；
-- 同一配对（同 tag/同锁）的 c_task loc/free 存在 RBA 读→写的数据先后依赖，
-  分处**不同 ts**，顺序由 burst_sch 的 `ts == cur_ts` 检查保证；不同锁/
-  不同 tag 的 loc/free 相互独立，无先后要求；
+- 同一配对（同 tag）的 c_task 存在先后依赖，分处**不同 ts**，
+  顺序由 burst_sch 的 `ts == cur_ts` 检查保证；不同配对相互独立，无先后要求；
+- burst 的 `branch`（br）为**预留**标记（可能跳转）；真实跳转由模板的
+  `ts_id` 不连续标记（带 br 的 ts 其后 ts_id 跳变）；
 - 每 ts 首个 burst（st=1）可声明 ts 级锁操作；
 - 线程描述（ts 数/编号/burst 模式/pri/vtsk_c/dma_c/cw）由 THM 从模板池随机选取。
 
@@ -93,7 +94,7 @@ burst_sch（二级发射：q0→EU0 / q1→EU1 各自按优先级选；4 个 DSE
 `err(8)/ccr(64)/sys_ts(48)/th_id(6)/th_stat(8)/o_mes(8)/cur_ts(8)/vtsk_c(8)/dma_c(8)/tw(64)/cw(8×48)`。
 
 - `dma_c`：c_task 执行掩码（dma_id 查询）；`cw`：c_task 操作表（tag/op_type/r/o/c_line_num/...）；
-- 建线程时由模板初始化；dma_ctrl **只读**（按 dma_id 查 op_type/tag），不回写。
+- 建线程时由模板初始化；th_sch 解析 c_task 时读取 cw（按 dma_id 查 op_type/tag），dma_ctrl 不回写。
 
 ### 3.5 ts 级互斥锁表（16 个）
 
@@ -104,18 +105,13 @@ burst_sch（二级发射：q0→EU0 / q1→EU1 各自按优先级选；4 个 DSE
 锁生命周期：lock_req 的 ts 首个 burst 发射时获取；unlock_req 的 ts 完成时释放；
 线程结束兜底释放本线程持有的全部锁。
 
-### 3.6 C 窗（dma_ctrl）
+### 3.6 C 窗（类型保留定义，RTL 未实例化）
 
-| 结构 | 定义 | 说明 |
-| --- | --- | --- |
-| 每线程独享 | 64×8 固定位置（全局号 = tid×8 + dma_id） | cw 8 项全部映射，纯数据存储，无 loc/free 生命周期 |
-
-C 窗条目 168bit：`tag(20)/c_line(128)/d/o/r/cnt(9)/ind(8)`。
-
-- C 窗地址即 cw 条目索引：cw 条目 k（dma_id=k）固定对应 `c_wnd[tid][k]`；
-- dma_ctrl 只读 cw（op_type/tag）执行 RBA 读/写，**不再维护**
-  C 窗 o/d/r/cnt/ind，也不回写 cw 的 r/o/c_line_num/start_ts/occ_ts
-  （cw 条目 / C 窗条目字段保留定义）。
+C 窗结构（`c_wnd_entry_t`，168bit：`tag(20)/c_line(128)/d/o/r/cnt(9)/ind(8)`）
+与 CSR.cw 条目字段（tag/op_type/r/o/c_line_num/start_ts/occ_ts/rsv）按此前设计
+**保留定义**，但当前 RTL **不再实例化/维护** C 窗：c_task 由 th_sch 解析
+（cw 只读 tag/op）后，经二级发射推入 dma_ctrl 的 c_task FIFO，done 由二级发射
+返回，无 RBA/SMC/C 窗数据通路。
 
 ## 4. KOA（输入调度）
 
@@ -142,7 +138,7 @@ C 窗条目 168bit：`tag(20)/c_line(128)/d/o/r/cnt(9)/ind(8)`。
 ### 5.1 职责
 
 接收 KOA 有效信息，按 `(stream,cid,pos)` 保序建线程，为 th_sch 提供可发射 burst，
-并根据 CU/dma_ctrl 完成反馈推进 `cur_ts` 与释放 ts 级锁。
+并根据 EU/dma_ctrl 完成反馈推进 `cur_ts` 与释放 ts 级锁。
 
 ### 5.2 保序
 
@@ -241,7 +237,7 @@ c_task 留在缓存下拍重选）；每个 FIFO 每拍出队 1 个（模型化�
   pri/cid/pos 按时隙表与速率模型产生；
 - agent：driver 驱动有效信息接口，monitor 采样输入/输出；
 - scoreboard：8 组优先级参考模型（SP+RR），比对输出顺序与组号；
-- tb_top：内联 POE 链路（THM/th_sch/burst_sch/CU/dma_ctrl）+ 线程模板池取描述。
+- tb_top：内联 POE 链路（THM/th_sch/burst_sch/EU/dma_ctrl/RBA）+ 线程模板池取描述。
 
 ## 11. 参数与位宽总表
 
@@ -256,7 +252,7 @@ c_task 留在缓存下拍重选）；每个 FIFO 每拍出队 1 个（模型化�
 | 执行单元 | EU ×2（各 4 个 CU 桩）；c_task 无执行单元（二级发射即 done） |
 | burst 位宽 | 38bit |
 | 锁表 | 16 × 6bit |
-| C 窗 | 每线程独享 8 位置（64×8，纯数据存储，无 loc/free 生命周期） |
+| C 窗 | 类型保留定义（c_wnd_entry_t 168bit），RTL 未实例化 |
 | cw 条目 / C 窗条目 | 48bit / 168bit |
 | KO 有效信息 | 111bit/条（KOA 缓存项） |
 | 完成反馈 | {vld, tid(6), ts_idx(4)} |
@@ -267,4 +263,4 @@ c_task 留在缓存下拍重选）；每个 FIFO 每拍出队 1 个（模型化�
 - pre_read 预读执行语义（当前 dma_ctrl 接收即吸收）；
 - SMC/RBA 总线握手与深度；
 - CSR 的 err/ccr/o_mes/tw 语义；
-- 线程模板池与锁模板的最终方案（当前 6 个模板，两套模板库待统一）。
+- 线程模板池与锁模板的最终方案（当前 9 个模板 T0~T8，两套模板库待统一）。
