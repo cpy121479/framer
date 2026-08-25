@@ -101,6 +101,10 @@
         <button onclick="tplPreset(128)">仅T7</button>
       </div>
       <div id="maskval"></div>
+      <div style="font-size:11px;color:var(--sub);margin-top:2px">
+        全选/全不选（= 全开）→ <b>来源模板库</b>（按 KO 来源匹配实测 c_task 均值，默认）；
+        勾选子集 → 限定通用池 T0~T9（benchmark 场景控制）。
+      </div>
     </div>
 
     <div class="grp">
@@ -176,7 +180,11 @@ function maskCalc() {
   document.querySelectorAll("#tpls input").forEach(c => {
     if (c.checked) m |= 1 << (+c.dataset.i);
   });
-  document.getElementById("maskval").textContent = "TPL_MASK = " + m + "（0x" + m.toString(16) + "）";
+  const mv = document.getElementById("maskval");
+  if (m === 0x3FF || m === 0)
+    mv.textContent = "TPL_MASK = 全开（来源模板库）";
+  else
+    mv.textContent = "TPL_MASK = " + m + "（0x" + m.toString(16) + "，通用池限定）";
   return m;
 }
 function tplAll(v) {
@@ -199,7 +207,7 @@ async function runSim() {
                 tpl_mask: maskCalc() };
   ["RUN_US","N_OH_PLANES","OH_SLOTS","N_X2X_PLANES","X2X_SLOTS","N_CH","UART_MPPS"]
     .forEach(k => cfg[k] = document.getElementById(k).value);
-  if (cfg.tpl_mask === 0) { alert("至少选择一个模板"); return; }
+  if (cfg.tpl_mask === 0) cfg.tpl_mask = 0x3FF; // 全不选 = 全开（来源模板库）
   const r = await fetch("/api/run", { method:"POST",
     headers:{"Content-Type":"application/json"}, body: JSON.stringify(cfg) });
   const j = await r.json();
