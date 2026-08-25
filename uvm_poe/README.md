@@ -13,7 +13,11 @@
   `out_pri/out_src(=优先级组号)/out_stream/out_cid/out_pos/pre_read`。
 - **THM**：保序（同 `(stream,cid,pos)` 活跃线程 → 8 深缓存 FIFO 放行；不能建线程
   且缓存满才 `ko_rdy=0`）+ 线程状态机（IDLE→READY→ISSUED→DONE）+ CSR + ts 级互斥锁
-  （16 个，仅一级发射阻塞）；线程描述从模板池随机取（10 个模板 T0~T9，每 ts ≤8 burst）。
+  （16 个，仅一级发射阻塞）；线程描述取自**来源模板库**（TPL_MASK 全开时：fgOTN
+  EXT/INS 按 stream+pos 匹配实测 c_task 均值 41~52/10~17，APS 3/3、ALM 4、UART
+  20/15；16 ts、U 形 c_task 分布——首尾 ts 多中间少；每 ts i_task 随机 1~8，
+  变体 0 不跳转、其余 20% 跳变率），或通用池 T0~T9
+  （TPL_MASK 收窄，benchmark 场景控制用）。
   ts 完成按预期 done 事件数（th_dneed）判定：i/v burst 计 1、c_task 按有效 task 数计，
   空 c_task burst 计 0（不入缓存、不占 DSE 机会，无事件 ts 由 THM 每拍兜底推进）。
   跳转边界（ts 末条 burst + 下一 ts_id 不连续）发射后等待 4+t 拍（t 随机，建模
@@ -29,9 +33,12 @@
 - **EU 桩 ×2**：各含 4 个 CU 桩（≤2 task 分发给 CU0/CU1，CU2/CU3 预留），
   全部完成后聚合回 1 个 `eu_done`（按 burst 计）。
 - **dma_ctrl**：4 个 c_task FIFO（每 DSE 1 个，8 深，存 `{tid,tidx,dma_id,tag,op}`），
-  每拍各出队 1 个（模型化消化腾空间）。
+  每拍各出队 1 个（模型化消化腾空间）；出队即发起读写，按模式/操作延迟后上报
+  `rw_done{tid,tidx,dma_id}`（THM occ_ts 门控：c_task 占据 ts..ts+occ-1，occ 随机
+  1-4，cur_ts 越过 ts+occ 及 T_DONE 需读写完成）。
 - **RBA**：4 个读写机会计数（初始 64）；dma 出队 1 个 c_task = 1 次读/写请求 →
-  计数 -1，70~75 拍后归还 +1；计数为 0 反压（停止出队 → FIFO 满 → 二级发射反压）。
+  计数 -1，按模式/操作延迟后归还 +1（SMC：写 10-20/读 70-80；L1：写 5-10/读 10-15，
+  `+RW_MODE` 选择，默认 SMC）；计数为 0 反压（停止出队 → FIFO 满 → 二级发射反压）。
 - **br 字段预留**：真实 ts 跳转由模板 `ts_id` 不连续标记。
 
 ## 数据结构要点
@@ -122,7 +129,8 @@ SEED=1 TPL_MASK=64 BENCH_TAG=t6_c RUN_US=50 WAVE=0 ./run_verilator.sh
 
 正确性前提：任何场景下 idle=64、UVM_ERROR=0、发射-完成守恒，违反则结果作废。
 出口反压下饱和场景存在积压：test 收尾前等线程排空（上限 `+DRAIN_MAX`，默认
-100µs）；SBUF 未排空属正常，scoreboard 按"输入-输出 = 队列剩余"校验守恒。
+250µs，覆盖 T6+occ 门控 ~165µs 的最长线程）；SBUF 未排空属正常，scoreboard 按
+"输入-输出 = 队列剩余 + 溢出丢弃"校验守恒。
 
 ## Benchmark GUI
 
@@ -158,7 +166,7 @@ uvm_poe/
 │  ├─ poe_burstsch.sv     # burst_sch：i/v 双调度 + 4×DSE 调度器；c_task 发射即 done
 │  ├─ poe_eu_stub.sv      # EU 桩：4 个 CU 桩，聚合回 1 个 eu_done
 │  ├─ poe_dma_ctrl.sv     # 4 个 c_task FIFO（满反压二级发射）
-│  └─ poe_rba.sv          # 4 个读写机会计数（64，70~75 拍归还）
+│  └─ poe_rba.sv          # 4 个读写机会计数（64，按模式/操作延迟归还）
 ├─ tb/                    # koa_if.sv、tb_top.sv
 ├─ uvm/                   # ko_pkg / item / seq / agent / scoreboard / tests
 ├─ bench/                 # benchmark GUI（gui_server.py + gui.html + results.json）

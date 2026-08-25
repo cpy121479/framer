@@ -64,7 +64,8 @@ package poe_thread_tpl_pkg;
         tpl_iv = b;
     endfunction
 
-    // c_task burst（38bit，单任务；dma_id 与 cw 配对）
+    // c_task burst（38bit，单任务；dma_id 与 cw 配对；occ0 参数为占位——
+    // THM 建线程时对 occ_ts 运行时随机 1-4 覆盖）
     function automatic logic [BURST_W-1:0] tpl_c(
         input logic st, input logic [2:0] dma0, input logic [7:0] occ0);
         burst_c_t b;
@@ -483,6 +484,119 @@ package poe_thread_tpl_pkg;
         t.dma_c = 8'h00; // 全部 c_task 无效（cw 不使用）
         t.cw = '0;
         tpl_empty_c = t;
+    endfunction
+
+    // ==================== 来源相关模板库（全 7 条 KO 输入流） ====================
+    // 不同的 KO 来源伴随不同的 c_task 数量：按实测每线程 c_task 平均数生成——
+    // fgOTN EXT/INS 按 (stream,pos) 粒度（41~52 / 10~17），其余来源单值：
+    // APS_EXT=3、APS_INS=3、ALM=4、UART_EXT=20、UART_INS=15。
+    // 生成规则：16 ts（ts0 固定 1 条 i_task，ts_id 可跳变）；ts1..15 的 c_task
+    // 按 U 形权重 [6,4,2,1,1,1,1,1,1,1,1,1,2,4,6] 分配（靠前/靠后的 ts 多、中间
+    // 的 ts 少，单 ts ≤7 条 c）；每 ts 的 i_task 数随机 1~8（受 iv+c ≤ 8 上限）；
+    // 跳转：每来源 4 个变体（C ±{2,1,1,2}，池均值 = 实测值）中变体 0 不跳转，
+    // 其余 3 个按 20% 跳变率（15 个 ts 边界随机取 3 个，ts_id 跳 1~2）。
+    // tag 按 T6 式 3 对 loc/free（同 tag）+ dma6 单条，模板生成时随机。
+
+    // (stream,pos) → 每线程 c_task 实测平均数（无数据的来源返回 -1 → 通用池）
+    function automatic int src_ct_avg(input int st, input int pos);
+        if (st == 0) // fgOTN EXT（OH_EXT）
+            case (pos)
+                0: return 42; 1: return 41; 2: return 52; 3: return 41;
+                4: return 44; 5: return 41; 6: return 45; 7: return 41;
+            endcase
+        if (st == 1) // fgOTN INS（OH_INS）
+            case (pos)
+                0: return 11; 1: return 10; 2: return 17; 3: return 14;
+                4: return 14; 5: return 10; 6: return 13; 7: return 10;
+            endcase
+        if (st == 2) return 3; // X2X APS_EXT
+        if (st == 3) return 3; // X2X APS_INS
+        if (st == 4) return 4; // X2X ALM
+        if (st == 5) return 20; // UART_EXT
+        if (st == 6) return 15; // UART_INS
+        return -1;
+    endfunction
+
+    // 生成一个 16 ts 来源模板：c_task 总数 = c_cnt（U 形分布）；每 ts i_task
+    // 随机 1~8（受 iv+c ≤ 8 上限）；jump_en=1 时 15 个 ts 边界随机取 3 个跳变
+    // （ts_id 跳 1~2，触发 THM 4+t 跳转等待）
+    function automatic thread_tpl_t tpl_gen(input int c_cnt, input bit jump_en);
+        thread_tpl_t t;
+        automatic int w [15];
+        automatic int ord [15];
+        automatic int asg [15];
+        automatic logic jb [15]; // 跳变边界（jb[k-1]=ts k-1→k 跳变）
+        automatic int tot_w = 0;
+        automatic int sum = 0;
+        automatic int rem;
+        automatic logic [19:0] tg;
+        w = '{6,4,2,1,1,1,1,1,1,1,1,1,2,4,6};
+        ord = '{0,14,1,13,2,12,3,11,4,10,5,9,6,8,7}; // 权重降序（补余按形状优先）
+        for (int j = 0; j < 15; j++) tot_w += w[j];
+        for (int j = 0; j < 15; j++) begin
+            asg[j] = (c_cnt * w[j]) / tot_w;
+            if (asg[j] > 7) asg[j] = 7;
+        end
+        for (int j = 0; j < 15; j++) sum += asg[j];
+        rem = c_cnt - sum;
+        while (rem > 0) // 余数按权重降序补 1（满 7 跳过顺延；c_cnt ≤ 54 < 105 上限）
+            for (int o = 0; o < 15 && rem > 0; o++)
+                if (asg[ord[o]] < 7) begin
+                    asg[ord[o]]++;
+                    rem--;
+                end
+        // 跳变边界：3/15 = 20%（随机选不重复边界）
+        for (int j = 0; j < 15; j++) jb[j] = 1'b0;
+        if (jump_en)
+            for (int s = 0; s < 3; s++) begin
+                automatic int b = $urandom % 15;
+                while (jb[b]) b = $urandom % 15;
+                jb[b] = 1'b1;
+            end
+        t = '0;
+        t.ts_cnt = 5'd16;
+        t.pri = 3'd1 + ($urandom % 3); // 1..3
+        t.ts_bs[3:0] = 4'd1; // ts0：固定 1 条 i_task
+        t.ts_id[0 +: 6] = 6'd0;
+        t.burst_seq[0 +: BURST_W] = tpl_iv(1'b1, 3'd1, 1'b0, 1'b0, 3'd0);
+        for (int k = 1; k < 16; k++) begin
+            automatic int n = asg[k-1];
+            automatic int iv_n = 1 + ($urandom % 8); // 每 ts i_task 随机 1..8
+            automatic int gap;
+            if (iv_n > 8 - n) iv_n = 8 - n; // 结构上限：iv + c ≤ 8
+            t.ts_bs[k*4 +: 4] = iv_n + n;
+            for (int m = 0; m < iv_n; m++)
+                t.burst_seq[(k*8 + m)*BURST_W +: BURST_W] =
+                    tpl_iv((m == 0) ? 1'b1 : 1'b0,
+                           (iv_n + n > 7) ? 3'd7 : 3'(iv_n + n),
+                           1'b0, 1'b0, (k + m) % 8);
+            for (int m = 0; m < n; m++)
+                t.burst_seq[(k*8 + iv_n + m)*BURST_W +: BURST_W] =
+                    tpl_c(1'b0, m[2:0], 8'd4);
+            gap = jb[k-1] ? (1 + ($urandom % 2)) : 0; // 跳变：ts_id 跳 1~2
+            t.ts_id[k*6 +: 6] = t.ts_id[(k-1)*6 +: 6] + gap[5:0] + 6'd1;
+        end
+        t.vtsk_c = 8'hFF;
+        t.dma_c = 8'h7F; // dma0..6 有效（单 ts 最多 7 条 c）
+        for (int pr = 0; pr < 3; pr++) begin // cw：3 对 loc/free（同 tag）+ dma6 单条
+            tg = $urandom % 4;
+            t.cw[(pr*2)*48 +: 48] = tpl_cw_entry(tg, 1'b0);
+            t.cw[(pr*2+1)*48 +: 48] = tpl_cw_entry(tg, 1'b1);
+        end
+        tg = $urandom % 4;
+        t.cw[6*48 +: 48] = tpl_cw_entry(tg, 1'b0);
+        tpl_gen = t;
+    endfunction
+
+    // 来源模板：按 (stream,pos) 实测均值 ±{2,1,1,2} 随机 4 选 1（池均值 = 实测值）；
+    // 变体 0（C-2）不跳转，其余按 20% 跳变率（3/15 边界）
+    function automatic thread_tpl_t tpl_src(input int st, input int pos);
+        automatic int c0 = src_ct_avg(st, pos);
+        automatic int k = $urandom % 4;
+        automatic int dk = (k == 0) ? -2 : (k == 1) ? -1 : (k == 2) ? 1 : 2;
+        automatic int c = c0 + dk;
+        if (c < 0) c = 0;
+        tpl_src = tpl_gen(c, k != 0);
     endfunction
 
     // 按索引取模板（越界回退到 T0）

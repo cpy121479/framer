@@ -76,7 +76,7 @@ burst_sch（二级发射：q0→EU0 / q1→EU1 各自按优先级选；4 个 DSE
 | burst_type / vld_cu | 1bit ×2 | 类型 / 需执行 task 数 |
 | tsk_id / dma_id | 3bit ×2 | 任务 id（查 CSR.vtsk_c / dma_c） |
 | c0 / c1 | 1bit ×2 | 任务有效标志 |
-| sub_pc / occ_ts | 8bit ×2 | i/v 指令指针 / c 占据 ts 数 |
+| sub_pc / occ_ts | 8bit ×2 | i/v 指令指针 / c 占据 ts 数（**THM 建线程时随机 1-4**：cur_ts 越过 ts+occ 需该 task 读写完成） |
 
 ### 3.3 线程结构
 
@@ -156,7 +156,15 @@ C 窗结构（`c_wnd_entry_t`，168bit：`tag(20)/c_line(128)/d/o/r/cnt(9)/ind(8
 
 ### 5.3 建线程（模板池）
 
-- 线程描述从模板池随机选取：`tpl = tpl_get($urandom % N_TPL)`；
+- **来源模板库优先**（`TPL_MASK` 全开时）：按 KO 来源选库——fgOTN EXT/INS 按
+  `(stream,pos)` 匹配实测每线程 c_task 平均数（EXT 41~52、INS 10~17），其余来源
+  单值（APS_EXT/APS_INS=3、ALM=4、UART_EXT=20、UART_INS=15）；每库 4 个变体
+  （目标值 ±{2,1,1,2}，池均值 = 实测值），16 ts 结构，c_task 按 U 形权重
+  `[6,4,2,1,1,1,1,1,1,1,1,1,2,4,6]` 分布（靠前/靠后 ts 多、中间少，单 ts ≤7 条 c），
+  **每 ts i_task 随机 1~8**（受 iv+c ≤ 8 上限）；**跳转**：变体 0（C-2）不跳转，
+  其余 3 个按 20% 跳变率（15 个 ts 边界随机取 3 个，ts_id 跳 1~2，触发 4+t 等待）；
+- **通用池**（`TPL_MASK` 收窄时，benchmark 场景控制用）：`T0~T9` 共 10 个模板，
+  掩码内均匀随机；
 - 解出 ts_cnt / 每 ts burst 数 / ts 编号 / pri / burst 模式 / vtsk_c / dma_c / cw；
 - 同步生成 CSR 表项（th_stat=T_READY、cur_ts=ts_id[0] 等）。
 
@@ -189,7 +197,11 @@ burst 为所属 ts **末条**且下一 ts 编号**不连续**（真实跳转标�
 - ts 完成判据：done 事件数 ≥ 预期 done 数 `th_dneed`（i/v burst 计 1，c_task burst
   按有效 task 数计，**空 c_task burst 计 0**），且该 ts burst 已全部发射；
   预期 done 数为 0 的 ts（如纯空 c_task）无 done 事件，由 THM 每拍兜底检查推进；
-- 当前 ts 完成 → 跨 ts（ts 编号跳转），末 ts 完成 → T_DONE；
+- **occ_ts 门控**：c_task 占据 ts..ts+occ-1（occ 建线程时随机 1-4）；cur_ts 越过
+  ts+occ 之后的 ts须等其**读写完成**（dma_ctrl 出队后按模式/操作延迟上报 rw_done，
+  区别于发射即回的调度 done），同 ts 多个未完成 task 取剩余者最小 occ；
+- 当前 ts 完成 → 跨 ts（ts 编号跳转），末 ts 完成 → T_DONE（**T_DONE 需本线程
+  全部 c_task 读写完成**，避免在途 DMA 跨线程生命周期）；
 - 跨过 unlock_req 的 ts → 释放锁；T_DONE 兜底释放本线程全部锁。
 
 ### 5.6 内部表项
@@ -250,11 +262,13 @@ c_task 留在缓存下拍重选）；每个 FIFO 每拍出队 1 个（模型化�
 
 - 4 个计数（每 DSE 1 个，对应 c_task FIFO），初始各 64 个读写机会；
 - dma 每出队 1 个 c_task（发起 1 次读/写请求），对应计数 -1；
-- 请求后随机 70~75 拍释放读写机会，计数 +1；
+- 请求后按模式/操作随机延迟释放读写机会（SMC：写 10-20 / 读 70-80 拍；L1：写 5-10 / 读 10-15 拍，`+RW_MODE` 选择，默认 SMC），计数 +1；
 - 计数为 0 时 `rdy=0` 反压：dma_ctrl 停止出队 → FIFO 填满 → 二级发射被反压；
 - 参数：`CREDITS=64`、`DELAY_MIN=70`、`DELAY_MAX=75`，`rba_bp/rba_cnt` 可观测。
 
-完成反馈：`dma_done{vld, tid, ts_idx}`（4 路，每 DSE 1 路，发射后 1 拍）。
+完成反馈：`dma_done{vld, tid, ts_idx}`（4 路，每 DSE 1 路，发射后 1 拍，调度完成）；
+**读写完成上报** `rw_done{vld, tid, ts_idx, dma_id}`（4 路，FIFO 出队后按模式/操作延迟，
+与 RBA 归还同分布、独立采样，每 DSE 每拍 ≤1）——THM occ_ts 门控与 T_DONE 等待用。
 
 ## 10. UVM 平台
 
@@ -274,7 +288,8 @@ c_task 留在缓存下拍重选）；每个 FIFO 每拍出队 1 个（模型化�
 | i/v 槽池（q0/q1） | 8 深 ×2（槽项含 pri） |
 | c_task 缓存 | 16 深（解析后的单 task：pri/tid/tidx/ts/dma_id/tag/op） |
 | dma_ctrl c_task FIFO | 4 个（每 DSE 1 个，8 深；满则反压二级发射） |
-| RBA 读写机会 | 4 个计数（初始 64；请求 -1，70~75 拍归还 +1；为 0 反压） |
+| RBA 读写机会 | 4 个计数（初始 64；请求 -1，按模式/操作延迟归还 +1；为 0 反压） |
+| 读写返回延迟 | SMC：写 10-20 / 读 70-80 拍；L1：写 5-10 / 读 10-15 拍，`+RW_MODE` 选择，默认 SMC |
 | 执行单元 | EU ×2（各 4 个 CU 桩）；c_task 无执行单元（二级发射即 done） |
 | burst 位宽 | 38bit |
 | 锁表 | 16 × 6bit |
@@ -289,4 +304,4 @@ c_task 留在缓存下拍重选）；每个 FIFO 每拍出队 1 个（模型化�
 - pre_read 预读执行语义（当前 THM 建线程拍转发 → burst_sch 8 深 pre_buf 占位吸收）；
 - SMC/RBA 总线握手与深度；
 - CSR 的 err/ccr/o_mes/tw 语义；
-- 线程模板池与锁模板的最终方案（当前 10 个模板 T0~T9）。
+- 线程模板池与锁模板的最终方案（来源模板库按实测 c_task 均值生成 + 通用池 T0~T9）。

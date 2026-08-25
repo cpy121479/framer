@@ -125,6 +125,8 @@ def start_run(cfg):
         env["TPL_MASK"] = str(int(cfg["tpl_mask"]))
     if cfg.get("meas_skip") not in (None, ""):
         env["MEAS_SKIP"] = str(int(cfg["meas_skip"]))
+    if cfg.get("rw_mode") not in (None, ""):
+        env["RW_MODE"] = str(int(cfg["rw_mode"]))
     LOG_DIR.mkdir(exist_ok=True)
     rid = time.strftime("%Y%m%d_%H%M%S") + "_" + tag
     logpath = LOG_DIR / f"{rid}.log"

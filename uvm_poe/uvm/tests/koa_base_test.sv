@@ -58,10 +58,11 @@ class koa_base_test extends uvm_test;
         join_none
         // 运行窗口 + 输出 drain 裕量
         #(ko_pkg::g_tb_cfg.run_us * 1000.0 + 20000.0);
-        // 出口反压下饱和场景存在积压：等线程排空再收尾（上限 DRAIN_MAX ns，默认 100us）
+        // 出口反压下饱和场景存在积压：等线程排空再收尾（上限 DRAIN_MAX ns，默认
+        // 250us——T6+occ 门控实测最长线程 ~165us，留余量）
         begin
             int dmax;
-            dmax = 100000;
+            dmax = 250000;
             void'($value$plusargs("DRAIN_MAX=%d", dmax));
             fork
                 wait (ko_pkg::g_all_idle === 1'b1);

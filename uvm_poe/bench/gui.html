@@ -22,6 +22,8 @@
   label.f span.hint { color:var(--sub); font-size:11px; margin-left:6px; }
   input[type=text], input[type=number] { width:120px; padding:4px 6px; border:1px solid var(--line);
     border-radius:5px; font:inherit; }
+  select { max-width:170px; padding:4px 6px; border:1px solid var(--line); border-radius:5px;
+           font:inherit; background:#fff; }
   .tpls { display:grid; grid-template-columns:1fr 1fr; gap:3px 8px; font-size:12px; }
   .tpls label { display:flex; gap:4px; align-items:center; cursor:pointer; }
   .tpls input { accent-color:var(--acc); }
@@ -104,6 +106,11 @@
     <div class="grp">
       <h2>参数侧（测量）</h2>
       <label class="f">MEAS_SKIP（预热拍）<input type="number" id="meas_skip" value="2000"></label>
+      <label class="f">读写返回模式
+        <select id="rw_mode">
+          <option value="0">SMC（写10-20 / 读70-80拍）</option>
+          <option value="1">L1（写5-10 / 读10-15拍）</option>
+        </select></label>
     </div>
 
     <button class="primary" id="runbtn" onclick="runSim()">运行场景</button>
@@ -184,6 +191,7 @@ async function runSim() {
   const cfg = { tag: document.getElementById("tag").value.trim() || "bench",
                 seed: document.getElementById("seed").value.trim(),
                 meas_skip: document.getElementById("meas_skip").value,
+                rw_mode: document.getElementById("rw_mode").value,
                 tpl_mask: maskCalc() };
   ["RUN_US","N_OH_PLANES","OH_SLOTS","N_X2X_PLANES","X2X_SLOTS","N_CH","UART_MPPS"]
     .forEach(k => cfg[k] = document.getElementById(k).value);

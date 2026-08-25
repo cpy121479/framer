@@ -18,11 +18,19 @@ module poe_dma_ctrl #(
     input logic [11:0] push_dma_id,
     input logic [7:0] push_tag,
     input logic [3:0] push_op,
+    // ---- 读写返回模式：0=SMC（写 10-20/读 70-80 拍）/ 1=L1（写 5-10/读 10-15 拍）----
+    input logic rw_mode,
     // ---- 满状态（→ burst_sch 反压） ----
     output logic [3:0] fifo_full,
     // ---- RBA 状态（观测用） ----
     output logic [3:0] rba_bp, // 对应 DSE 读写机会为 0（反压）
-    output logic [27:0] rba_cnt // 4×7bit 读写机会数
+    output logic [27:0] rba_cnt, // 4×7bit 读写机会数
+    // ---- c_task 读写完成上报（FIFO 出队 = 发起读写，70~75 拍后完成；
+    //      与 RBA 归还同分布、独立采样；每 DSE 每拍最多上报 1 个）----
+    output logic [3:0] rw_done_vld,
+    output logic [23:0] rw_done_tid,
+    output logic [15:0] rw_done_tidx,
+    output logic [11:0] rw_done_dma
 );
 
     import poe_types_pkg::*;
@@ -46,6 +54,26 @@ module poe_dma_ctrl #(
     logic [3:0] rba_rdy;
     logic [27:0] rba_cnt_i;
 
+    // ---- 读写完成流水：出队的 c_task 经按模式/操作的延迟完成并上报（THM occ 门控用）----
+    typedef struct packed {
+        logic [5:0] tid;
+        logic [3:0] tidx;
+        logic [2:0] dma_id;
+        logic op; // 0=读（loc）/ 1=写（free）
+        logic [6:0] remain; // 递减；0 = 已到期（待上报）
+    } rw_ent_t;
+    localparam int RW_MAX = 64; // 在途上限 = RBA credits
+    rw_ent_t rw_q [4][RW_MAX];
+    int rw_n [4];
+    logic [3:0] rw_done_vld_r;
+    logic [23:0] rw_done_tid_r;
+    logic [15:0] rw_done_tidx_r;
+    logic [11:0] rw_done_dma_r;
+    assign rw_done_vld = rw_done_vld_r;
+    assign rw_done_tid = rw_done_tid_r;
+    assign rw_done_tidx = rw_done_tidx_r;
+    assign rw_done_dma = rw_done_dma_r;
+
     assign fifo_full[0] = (f_cnt[0] == FIFO_DEPTH);
     assign fifo_full[1] = (f_cnt[1] == FIFO_DEPTH);
     assign fifo_full[2] = (f_cnt[2] == FIFO_DEPTH);
@@ -58,9 +86,17 @@ module poe_dma_ctrl #(
             pop_vld[d] = (f_cnt[d] != 0) && rba_rdy[d];
     end
 
+    logic [3:0] pop_op; // 本拍出队操作类型（0=读 1=写）
+    always_comb begin
+        for (int d = 0; d < 4; d++)
+            pop_op[d] = f_mem[d][f_head[d]].op;
+    end
+
     poe_rba u_rba (
     .clk(clk), .rst_n(rst_n),
     .req_vld({pop_vld[3], pop_vld[2], pop_vld[1], pop_vld[0]}),
+    .req_op(pop_op),
+    .rw_mode(rw_mode),
     .rdy(rba_rdy),
     .cnt(rba_cnt_i)
     );
@@ -72,8 +108,14 @@ module poe_dma_ctrl #(
                 f_head[d] <= '0;
                 f_tail[d] <= '0;
                 f_cnt[d] <= '0;
+                rw_n[d] = 0;
             end
+            rw_done_vld_r <= '0;
+            rw_done_tid_r <= '0;
+            rw_done_tidx_r <= '0;
+            rw_done_dma_r <= '0;
         end else begin
+            rw_done_vld_r <= 4'b0;
             for (int d = 0; d < 4; d++) begin
                 automatic logic push = push_vld[d] && !fifo_full[d];
                 automatic logic pop = pop_vld[d];
@@ -92,6 +134,41 @@ module poe_dma_ctrl #(
                 // 计数：写 +1 / 读 -1（同拍写读净 0）
                 if (push && !pop) f_cnt[d] <= f_cnt[d] + 1'b1;
                 else if (!push && pop) f_cnt[d] <= f_cnt[d] - 1'b1;
+                // 读写完成流水：递减/到期上报 1 个/拍，出队项入队（70~75 拍完成）
+                begin
+                    automatic int wr = 0;
+                    automatic logic outd = 1'b0;
+                    for (int j = 0; j < rw_n[d]; j++) begin
+                        automatic rw_ent_t r = rw_q[d][j];
+                        if (r.remain == 7'd0 && !outd) begin
+                            // 本拍上报该到期项（丢弃，不回写队列）
+                            outd = 1'b1;
+                            rw_done_vld_r[d] <= 1'b1;
+                            rw_done_tid_r[d*6 +: 6] <= r.tid;
+                            rw_done_tidx_r[d*4 +: 4] <= r.tidx;
+                            rw_done_dma_r[d*3 +: 3] <= r.dma_id;
+                        end else begin
+                            r.remain = (r.remain > 7'd1) ? r.remain - 7'd1 : 7'd0;
+                            rw_q[d][wr] = r;
+                            wr++;
+                        end
+                    end
+                    if (pop) begin
+                        automatic rw_ent_t r;
+                        automatic int dmin;
+                        automatic int dmax;
+                        r.tid = f_mem[d][f_head[d]].tid;
+                        r.tidx = f_mem[d][f_head[d]].tidx;
+                        r.dma_id = f_mem[d][f_head[d]].dma_id;
+                        r.op = f_mem[d][f_head[d]].op;
+                        dmin = rw_delay_min(rw_mode, r.op);
+                        dmax = rw_delay_max(rw_mode, r.op);
+                        r.remain = dmin[6:0] + ($urandom % (dmax - dmin + 1));
+                        rw_q[d][wr] = r;
+                        wr++;
+                    end
+                    rw_n[d] = wr;
+                end
             end
         end
     end

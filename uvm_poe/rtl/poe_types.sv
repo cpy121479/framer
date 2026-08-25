@@ -104,4 +104,19 @@ package poe_types_pkg;
     localparam int CW_ENTRY_W = 48;
     localparam int C_WND_ENTRY_W = 168;
 
+    // ---- c_task 读写返回延迟（拍，随机均匀取 [min,max]）：两种模式（+RW_MODE 可选）。
+    //      op 语义：0=loc（读，SMC→C 窗回填）/ 1=free（写，C 窗→SMC 写回）。
+    //      SMC 模式：写 10-20 / 读 70-80；L1 模式：写 5-10 / 读 10-15。
+    //      rw_done 完成上报与 RBA 读写机会归还共用此延迟表 ----
+    localparam int RW_MODE_SMC = 0;
+    localparam int RW_MODE_L1 = 1;
+
+    function automatic int rw_delay_min(input int mode, input logic op);
+        rw_delay_min = (mode == RW_MODE_L1) ? (op ? 5 : 10) : (op ? 10 : 70);
+    endfunction
+
+    function automatic int rw_delay_max(input int mode, input logic op);
+        rw_delay_max = (mode == RW_MODE_L1) ? (op ? 10 : 15) : (op ? 20 : 80);
+    endfunction
+
 endpackage

@@ -123,6 +123,18 @@ module tb_top;
     logic [3:0] dma_done_vld;
     logic [23:0] dma_done_tid;
     logic [15:0] dma_done_tidx;
+    // ---- c_task 读写完成（dma_ctrl → THM occ 门控）----
+    logic [3:0] rw_done_vld;
+    logic [23:0] rw_done_tid;
+    logic [15:0] rw_done_tidx;
+    logic [11:0] rw_done_dma;
+    // 读写返回模式：0=SMC（写10-20/读70-80拍）/ 1=L1（写5-10/读10-15拍）
+    logic rw_mode;
+    initial begin
+        automatic int m = 0;
+        void'($value$plusargs("RW_MODE=%d", m));
+        rw_mode = m[0];
+    end
 
     poe_thm #(.MAX_THREADS(64)) u_thm (
     .clk(clk), .rst_n(rst_n),
@@ -144,6 +156,8 @@ module tb_top;
     .eu_done_tidx1(eu_done_tidx1),
     .dma_done_vld(dma_done_vld), .dma_done_tid(dma_done_tid),
     .dma_done_tidx(dma_done_tidx),
+    .rw_done_vld(rw_done_vld), .rw_done_tid(rw_done_tid),
+    .rw_done_tidx(rw_done_tidx), .rw_done_dma(rw_done_dma),
     .emit_vld(1'b0), .emit_tid(6'd0),
     .pre_buf_rdy(pre_buf_rdy),
     .pre_vld(pre_vld), .pre_tid(pre_tid),
@@ -227,9 +241,12 @@ module tb_top;
     .push_dma_id(emit_dma_dma_id),
     .push_tag(emit_dma_tag),
     .push_op(emit_dma_op),
+    .rw_mode(rw_mode),
     .fifo_full(dma_full),
     .rba_bp(rba_bp),
-    .rba_cnt(rba_cnt)
+    .rba_cnt(rba_cnt),
+    .rw_done_vld(rw_done_vld), .rw_done_tid(rw_done_tid),
+    .rw_done_tidx(rw_done_tidx), .rw_done_dma(rw_done_dma)
     );
 
     // O 窗反压占位：固定 0（O 窗池设计后续补充）

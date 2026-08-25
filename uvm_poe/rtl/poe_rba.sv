@@ -1,25 +1,27 @@
 // POE RBA 行为模型：4 个读写机会计数（每 DSE 1 个，对应 dma_ctrl 的 c_task FIFO）
 // - 初始 CREDITS（64）个读写机会；dma 每发起 1 次读/写请求，对应计数 -1；
-// - 请求后随机 DELAY_MIN~DELAY_MAX（70~75）拍释放读写机会，计数 +1；
+// - 请求后随机释放读写机会（拍数按模式/操作，见 poe_types_pkg rw_delay_*：
+//   SMC 写 10-20 / 读 70-80；L1 写 5-10 / 读 10-15），计数 +1；
 // - 计数为 0 时 rdy=0（拉起反压），dma_ctrl 停止从对应 FIFO 出队，
 //   FIFO 填满后二级发射被反压。
 module poe_rba #(
     parameter int N_CH = 4,
-    parameter int CREDITS = 64,
-    parameter int DELAY_MIN = 70,
-    parameter int DELAY_MAX = 75
-) (
+    parameter int CREDITS = 64
+    ) (
     input logic clk,
     input logic rst_n,
-    // ---- dma 读/写请求（每 DSE 每拍 ≤1） ----
+    // ---- dma 读/写请求（每 DSE 每拍 ≤1）----
     input logic [N_CH-1:0] req_vld,
+    input logic [N_CH-1:0] req_op, // 0=读（loc）/ 1=写（free）
+    input logic rw_mode, // 0=SMC / 1=L1（延迟表见 poe_types_pkg）
     // ---- 可发起（计数>0）；0=反压 ----
     output logic [N_CH-1:0] rdy,
-    // ---- 当前读写机会数（观测用） ----
+    // ---- 当前读写机会数（观测用）----
     output logic [N_CH*7-1:0] cnt
 );
 
     localparam int RET_MAX = CREDITS; // 最大在途请求数 = 初始机会数
+    import poe_types_pkg::*; // rw_delay_min/max（模式 × 读/写延迟表）
     logic [6:0] c [N_CH];
     logic [6:0] ret_q [N_CH][RET_MAX]; // 在途请求剩余释放拍数
     logic [6:0] ret_n [N_CH]; // 在途请求数（0..64）
@@ -53,9 +55,11 @@ module poe_rba #(
                         wr++;
                     end
                 end
-                // 2) 新请求入队（remaining = 70 + rand(0..5)）
+                // 2) 新请求入队（按模式/操作随机 [min,max] 拍释放）
                 if (issue) begin
-                    ret_q[i][wr] <= DELAY_MIN + ($urandom % (DELAY_MAX - DELAY_MIN + 1));
+                    automatic int dmin = rw_delay_min(rw_mode, req_op[i]);
+                    automatic int dmax = rw_delay_max(rw_mode, req_op[i]);
+                    ret_q[i][wr] <= dmin[6:0] + ($urandom % (dmax - dmin + 1));
                     wr++;
                 end
                 ret_n[i] <= wr;

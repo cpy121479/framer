@@ -10,7 +10,9 @@
 //   cur_ts 仅由 eu_done/dma_done 统计推进，一级队列可含 cur_ts 及更靠后 ts 的 burst；
 //   ts 完成判据 = done 事件数 ≥ 预期值 th_dneed（i/v burst 计 1、c_task burst 按有效
 //   task 数计，空 c_task burst 计 0、不占 DSE 发射机会），th_dneed=0 的 ts 无事件，
-//   由每拍兜底检查推进
+//   由每拍兜底检查推进；occ_ts 门控：c_task 占据 ts..ts+occ-1（occ 随机 1-4），
+//   cur_ts 越过 ts+occ 需其读写完成（dma_ctrl rw_done，70~75 拍），T_DONE 前全部
+//   读写须完成
 // - 建线程时同步生成 CSR 表项（csr_t，th_id 6bit、cw 8×6B），th_stat/cur_ts 与状态机
 //   同步；dma_c/cw 暴露给 th_sch（解析 c_task 时按 dma_id 查询，只读）
 // - pre_read 转发：带预读 KO 建线程时同拍把 4 组 {vld, tid, dma_addr, op} 转发给
@@ -59,6 +61,12 @@ module poe_thm #(
     input logic [3:0] dma_done_vld, // 4 个 DSE 单元
     input logic [23:0] dma_done_tid, // 4×6
     input logic [15:0] dma_done_tidx, // 4×4
+    // ---- dma_ctrl 读写完成（FIFO 出队后 70~75 拍，每 DSE 每拍 ≤1）：
+    //      occ_ts 门控——cur_ts 越过 ts+occ_ts 前需该 ts 未完成 c_task 清空 ----
+    input logic [3:0] rw_done_vld,
+    input logic [23:0] rw_done_tid,
+    input logic [15:0] rw_done_tidx,
+    input logic [11:0] rw_done_dma,
     // ---- burst_sch 二级发射通知（打拍起点，占位） ----
     input logic emit_vld,
     input logic [5:0] emit_tid,
@@ -92,9 +100,11 @@ module poe_thm #(
     logic [3:0] th_ts_idx [MAX_THREADS]; // 当前在第几个 ts（序号 0..n-1）
     logic [TS_ID_W-1:0] th_ts_id_r [MAX_THREADS][MAX_TS]; // 每 ts 编号（递增可跳转）
     logic [7:0] th_wait [MAX_THREADS];
-    logic [4:0] th_done_acc [MAX_THREADS][MAX_TS]; // 每 ts 已累计 done 事件数（i/v burst 1、c_task 按有效 task 数）
+    logic [3:0] th_done_acc [MAX_THREADS][MAX_TS]; // 每 ts 已累计 done 事件数（i/v burst 1、c_task 按有效 task 数）
     logic [3:0] th_need [MAX_THREADS][MAX_TS]; // 每 ts 实际执行 burst 数（= ts_bs，≤8）
     logic [4:0] th_dneed [MAX_THREADS][MAX_TS]; // 每 ts 预期 done 事件数（i/v=1 / c=有效 task 数，空 c_task=0）
+    logic [7:0] th_rw_m [MAX_THREADS][MAX_TS]; // 每 ts 未完成读写 c_task 位图（bit=dma_id）
+    logic [15:0] th_occ_r [MAX_THREADS][MAX_TS]; // 每 ts 各 dma_id 的 occ-1（8×2bit，occ 随机 1-4）
     logic [7:0] th_off [MAX_THREADS][MAX_TS+1]; // 每 ts 起始累计偏移（off[k]=前 k 个 ts 的 need 和）
     logic [3:0] th_sel_ts [MAX_THREADS]; // bs_pc 所属 ts 序号（组合推导）
     logic [2:0] th_sel_idx [MAX_THREADS]; // bs_pc 在所属 ts 内的 burst 序号（组合推导）
@@ -125,6 +135,37 @@ module poe_thm #(
                 r--;
             end
         return 0;
+    endfunction
+
+    function automatic logic tpl_mask_is_full();
+        tpl_mask_is_full = (tpl_mask & ((1 << N_TPL) - 1)) == ((1 << N_TPL) - 1);
+    endfunction
+
+    // ---- c_task 读写占用门控（occ_ts 语义）：ts k 的 c_task 占据 [k, k+occ-1]，
+    // cur_ts 越过 k+occ 前需其读写完成（dma_ctrl rw_done）；同 ts 多个未完成
+    // task 取剩余者的最小 occ（最紧的屏障）----
+    function automatic logic [3:0] rw_occ_min(input int i, input int k);
+        automatic logic [3:0] mn = 4'd5;
+        for (int b = 0; b < 8; b++)
+            if (th_rw_m[i][k][b]) begin
+                automatic logic [3:0] o = {2'b00, th_occ_r[i][k][b*2 +: 2]} + 4'd1;
+                if (o < mn) mn = o;
+            end
+        rw_occ_min = (mn == 4'd5) ? 4'd4 : mn; // 空 mask 不被调用（rw_blk 已判非空）
+    endfunction
+
+    // 从 nts 跨入 nts+1 是否被未完成读写阻挡：∃ k，pending(k)≠0 且 k+occ_min(k) ≤ nts
+    function automatic logic rw_blk(input int i, input logic [3:0] nts);
+        rw_blk = 1'b0;
+        for (int k = 0; k < MAX_TS; k++)
+            if (th_rw_m[i][k] != 8'b0 && (k + rw_occ_min(i, k) <= nts))
+                rw_blk = 1'b1;
+    endfunction
+
+    function automatic logic rw_empty(input int i);
+        rw_empty = 1'b1;
+        for (int k = 0; k < MAX_TS; k++)
+            if (th_rw_m[i][k] != 8'b0) rw_empty = 1'b0;
     endfunction
 
     // ---- 8 深保序缓存（只存有效信息：预读 + 保序键；线程描述由模板池随机） ----
@@ -373,6 +414,8 @@ module poe_thm #(
                 for (int k = 0; k < MAX_TS; k++) th_done_acc[i][k] <= '0;
                 for (int k = 0; k < MAX_TS; k++) th_need[i][k] <= '0;
                 for (int k = 0; k < MAX_TS; k++) th_dneed[i][k] <= '0;
+                for (int k = 0; k < MAX_TS; k++) th_rw_m[i][k] <= '0;
+                for (int k = 0; k < MAX_TS; k++) th_occ_r[i][k] <= '0;
                 csr[i] <= '0;
             end
             for (int i = 0; i < N_LOCK; i++) lock_owner[i] <= LOCK_FREE;
@@ -414,8 +457,12 @@ module poe_thm #(
                 end
                 if (t >= 0 && (from_buf || (ko_vld && ko_rdy &&
                 !key_active(ko_stream, ko_cid, ko_pos)))) begin
-                    // 线程描述：从模板池随机选取（TPL_MASK 限定集合，锁字段随 burst 模板携带）
-                    tpl = tpl_get(tpl_pick());
+                    // 线程描述：来源模板库优先（全 7 条流按来源/pos 匹配实测
+                    // c_task 均值，TPL_MASK 全开时生效；其余走通用池）
+                    if (st <= 3'd6 && tpl_mask_is_full())
+                        tpl = tpl_src(st, p);
+                    else
+                        tpl = tpl_get(tpl_pick());
                     ts = tpl.ts_cnt;
                     bs = tpl.ts_bs;
                     tid_vec = tpl.ts_id;
@@ -446,10 +493,22 @@ module poe_thm #(
                                     dneed_k = dneed_k +
                                         {(cb.c0 || (cb.vld_cu && cb.c1)) ? 5'd1 : 5'd0};
                                 else begin
-                                    if (cb.c0 && dc[cb.dma_id0])
+                                    // occ_ts 运行时随机 1-4（覆盖模板值，回写 burst）
+                                    cb.occ_ts0 = 8'($urandom_range(1, 4));
+                                    cb.occ_ts1 = 8'($urandom_range(1, 4));
+                                    th_burst_r[t][k][m] <= cb;
+                                    if (cb.c0 && dc[cb.dma_id0]) begin
                                         dneed_k = dneed_k + 5'd1;
-                                    if (cb.vld_cu && cb.c1 && dc[cb.dma_id1])
+                                        th_rw_m[t][k][cb.dma_id0] <= 1'b1;
+                                        th_occ_r[t][k][cb.dma_id0*2 +: 2] <=
+                                            cb.occ_ts0[1:0] - 2'd1;
+                                    end
+                                    if (cb.vld_cu && cb.c1 && dc[cb.dma_id1]) begin
                                         dneed_k = dneed_k + 5'd1;
+                                        th_rw_m[t][k][cb.dma_id1] <= 1'b1;
+                                        th_occ_r[t][k][cb.dma_id1*2 +: 2] <=
+                                            cb.occ_ts1[1:0] - 2'd1;
+                                    end
                                 end
                             end
                         end
@@ -536,6 +595,15 @@ module poe_thm #(
                     end
                 end
             end
+            // ---- c_task 读写完成上报：清对应 pending 位（occ 门控屏障释放）----
+            for (int d = 0; d < 4; d++)
+                if (rw_done_vld[d]) begin
+                    automatic logic [5:0] rt = rw_done_tid[d*6 +: 6];
+                    automatic logic [3:0] rx = rw_done_tidx[d*4 +: 4];
+                    automatic logic [2:0] rm = rw_done_dma[d*3 +: 3];
+                    if (rt < MAX_THREADS && rx < MAX_TS)
+                        th_rw_m[rt][rx][rm] <= 1'b0;
+                end
             // ---- 完成推进：eu0/eu1/dma0..3 六路 done 聚合（同 (tid,tidx) 已合并）后
             //      逐线程推进；ts 完成判据 = done 事件数 ≥ th_dneed（预期事件数）且
             //      该 ts burst 已全部发射（th_sel_ts 越过该 ts 或流水到头——事件本身
@@ -563,9 +631,16 @@ module poe_thm #(
                             (th_sel_ts[i] > nts ||
                              th_bs_pc[i] >= th_off[i][th_ts_n[i]])) begin
                             if (nts + 1 >= th_ts_n[i]) begin
-                                done_th = 1'b1;
+                                // 末 ts：全部读写完成才 T_DONE（避免在途 DMA 跨线程
+                                // 生命周期，也防 tid 复用时 pending 被旧完成误清）
+                                if (rw_empty(i))
+                                    done_th = 1'b1;
                                 break;
                             end
+                            // occ_ts 门控：越过 ts+occ_ts 之后的 ts 需等该 ts 未完成
+                            // c_task 的读写完成（dma_ctrl 70~75 拍延迟）
+                            if (rw_blk(i, nts))
+                                break;
                             nts = nts + 1;
                             ncts = th_ts_id_r[i][nts];
                         end else begin
