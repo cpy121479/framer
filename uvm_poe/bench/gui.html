@@ -111,6 +111,8 @@
           <option value="0">SMC（写10-20 / 读70-80拍）</option>
           <option value="1">L1（写5-10 / 读10-15拍）</option>
         </select></label>
+      <label class="f">pre_read occ_ts<span class="hint">1-4</span>
+        <input type="number" id="pre_occ" value="3" min="1" max="4"></label>
     </div>
 
     <button class="primary" id="runbtn" onclick="runSim()">运行场景</button>
@@ -192,6 +194,7 @@ async function runSim() {
                 seed: document.getElementById("seed").value.trim(),
                 meas_skip: document.getElementById("meas_skip").value,
                 rw_mode: document.getElementById("rw_mode").value,
+                pre_occ: document.getElementById("pre_occ").value,
                 tpl_mask: maskCalc() };
   ["RUN_US","N_OH_PLANES","OH_SLOTS","N_X2X_PLANES","X2X_SLOTS","N_CH","UART_MPPS"]
     .forEach(k => cfg[k] = document.getElementById(k).value);

@@ -171,6 +171,9 @@ C 窗结构（`c_wnd_entry_t`，168bit：`tag(20)/c_line(128)/d/o/r/cnt(9)/ind(8
 **pre_read 转发**：带预读的 KO 建线程时，同拍把 4 组 `{pre_vld, pre_tid,
 pre_dma_addr, pre_op}` 转发给 burst_sch 的 8 深 pre_buf（占位，吸收不执行）；
 `pre_buf_rdy=0`（快满）时带预读 KO 反压（`ko_rdy=0`），无预读 KO 不受影响。
+**pre_read occ 门控**：带预读线程登记 ts0 屏障（bit7），`cur_ts` 越过
+`ts0 + PRE_OCC` 需预读写完成（THM 本地按模式/op 延迟倒计时，取各使能组最大值）；
+`PRE_OCC` 参数化（plusarg，默认 3，范围 1..4），T_DONE 同样等待。
 
 ### 5.4 一级发射门控（ready_mask）
 

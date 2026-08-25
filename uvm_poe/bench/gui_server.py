@@ -127,6 +127,8 @@ def start_run(cfg):
         env["MEAS_SKIP"] = str(int(cfg["meas_skip"]))
     if cfg.get("rw_mode") not in (None, ""):
         env["RW_MODE"] = str(int(cfg["rw_mode"]))
+    if cfg.get("pre_occ") not in (None, ""):
+        env["PRE_OCC"] = str(int(cfg["pre_occ"]))
     LOG_DIR.mkdir(exist_ok=True)
     rid = time.strftime("%Y%m%d_%H%M%S") + "_" + tag
     logpath = LOG_DIR / f"{rid}.log"

@@ -67,6 +67,7 @@ module poe_thm #(
     input logic [23:0] rw_done_tid,
     input logic [15:0] rw_done_tidx,
     input logic [11:0] rw_done_dma,
+    input logic rw_mode, // 读写返回模式（0=SMC/1=L1，pre_read 完成延迟查表用）
     // ---- burst_sch 二级发射通知（打拍起点，占位） ----
     input logic emit_vld,
     input logic [5:0] emit_tid,
@@ -103,8 +104,19 @@ module poe_thm #(
     logic [3:0] th_done_acc [MAX_THREADS][MAX_TS]; // 每 ts 已累计 done 事件数（i/v burst 1、c_task 按有效 task 数）
     logic [3:0] th_need [MAX_THREADS][MAX_TS]; // 每 ts 实际执行 burst 数（= ts_bs，≤8）
     logic [4:0] th_dneed [MAX_THREADS][MAX_TS]; // 每 ts 预期 done 事件数（i/v=1 / c=有效 task 数，空 c_task=0）
-    logic [7:0] th_rw_m [MAX_THREADS][MAX_TS]; // 每 ts 未完成读写 c_task 位图（bit=dma_id）
-    logic [15:0] th_occ_r [MAX_THREADS][MAX_TS]; // 每 ts 各 dma_id 的 occ-1（8×2bit，occ 随机 1-4）
+    logic [7:0] th_rw_m [MAX_THREADS][MAX_TS]; // 每 ts 未完成读写位图（bit0..6=dma_id，bit7=pre_read）
+    logic [15:0] th_occ_r [MAX_THREADS][MAX_TS]; // 每 ts 各 id 的 occ-1（8×2bit；nibble7=pre_read）
+    logic [7:0] th_pre_cnt [MAX_THREADS]; // pre_read 读写完成倒计时（模式/op 延迟）
+
+    // ---- pre_read 占据 ts 数：参数化（plusarg PRE_OCC，默认 3，范围 1..4）。
+    //      带预读线程的 cur_ts 越过 ts0+PRE_OCC 需预读写完成（同 c_task occ 门控）----
+    int pre_occ_ts;
+    initial begin
+        pre_occ_ts = 3;
+        void'($value$plusargs("PRE_OCC=%d", pre_occ_ts));
+        if (pre_occ_ts < 1) pre_occ_ts = 1;
+        if (pre_occ_ts > 4) pre_occ_ts = 4;
+    end
     logic [7:0] th_off [MAX_THREADS][MAX_TS+1]; // 每 ts 起始累计偏移（off[k]=前 k 个 ts 的 need 和）
     logic [3:0] th_sel_ts [MAX_THREADS]; // bs_pc 所属 ts 序号（组合推导）
     logic [2:0] th_sel_idx [MAX_THREADS]; // bs_pc 在所属 ts 内的 burst 序号（组合推导）
@@ -416,6 +428,7 @@ module poe_thm #(
                 for (int k = 0; k < MAX_TS; k++) th_dneed[i][k] <= '0;
                 for (int k = 0; k < MAX_TS; k++) th_rw_m[i][k] <= '0;
                 for (int k = 0; k < MAX_TS; k++) th_occ_r[i][k] <= '0;
+                th_pre_cnt[i] <= 8'd0;
                 csr[i] <= '0;
             end
             for (int i = 0; i < N_LOCK; i++) lock_owner[i] <= LOCK_FREE;
@@ -534,6 +547,23 @@ module poe_thm #(
                     csr[t].vtsk_c <= vtsk;
                     csr[t].dma_c <= dc;
                     csr[t].tw <= 64'd0;
+                    // ---- pre_read occ 门控：带预读的线程登记 ts0 bit7（屏障 =
+                    //      ts0 + PRE_OCC）；读写完成按模式/op 延迟倒计时（取
+                    //      各使能组的最大延迟，到 0 清 bit，T_DONE 等待同覆盖）----
+                    th_pre_cnt[t] <= 8'd0;
+                    if (|src_pre_vld) begin
+                        automatic logic [7:0] pd = 8'd0;
+                        for (int g = 0; g < 4; g++)
+                            if (src_pre_vld[g]) begin
+                                automatic int dmin = rw_delay_min(rw_mode, src_pre_op[g]);
+                                automatic int dmax = rw_delay_max(rw_mode, src_pre_op[g]);
+                                automatic int d = dmin + ($urandom % (dmax - dmin + 1));
+                                if (d[7:0] > pd) pd = d[7:0];
+                            end
+                        th_rw_m[t][0][7] <= 1'b1;
+                        th_occ_r[t][0][7*2 +: 2] <= pre_occ_ts[1:0] - 2'd1;
+                        th_pre_cnt[t] <= pd;
+                    end
                     csr[t].cw <= cw;
                     if (from_buf) begin
                         buf_head <= (buf_head == BUF_DEPTH-1) ? '0 : buf_head + 1'b1;
@@ -603,6 +633,14 @@ module poe_thm #(
                     automatic logic [2:0] rm = rw_done_dma[d*3 +: 3];
                     if (rt < MAX_THREADS && rx < MAX_TS)
                         th_rw_m[rt][rx][rm] <= 1'b0;
+                end
+            // ---- pre_read 读写完成倒计时：到 0 清 ts0 bit7 屏障（复用 tid 时
+            //      旧计数必为 0——T_DONE 已等其清空，无 NBA 冲突）----
+            for (int i = 0; i < MAX_THREADS; i++)
+                if (th_pre_cnt[i] != 8'd0) begin
+                    th_pre_cnt[i] <= th_pre_cnt[i] - 8'd1;
+                    if (th_pre_cnt[i] == 8'd1)
+                        th_rw_m[i][0][7] <= 1'b0;
                 end
             // ---- 完成推进：eu0/eu1/dma0..3 六路 done 聚合（同 (tid,tidx) 已合并）后
             //      逐线程推进；ts 完成判据 = done 事件数 ≥ th_dneed（预期事件数）且

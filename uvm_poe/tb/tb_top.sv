@@ -158,6 +158,7 @@ module tb_top;
     .dma_done_tidx(dma_done_tidx),
     .rw_done_vld(rw_done_vld), .rw_done_tid(rw_done_tid),
     .rw_done_tidx(rw_done_tidx), .rw_done_dma(rw_done_dma),
+    .rw_mode(rw_mode),
     .emit_vld(1'b0), .emit_tid(6'd0),
     .pre_buf_rdy(pre_buf_rdy),
     .pre_vld(pre_vld), .pre_tid(pre_tid),
@@ -394,7 +395,7 @@ module tb_top;
     int meas_skip;
     longint cyc_cnt;
     longint meas_cyc;
-    longint n_cre, n_thdone, n_koa_out, n_ko_in, n_ko_acc, n_ko_bp, n_sbuf_ovf;
+    longint n_cre, n_thdone, n_koa_out, n_ko_in, n_ko_acc, n_ko_bp, n_sbuf_ovf, n_pre;
     longint n_in_s [7]; // 分来源输入握手：0=OH_EXT 1=OH_INS 2=APS_EXT 3=APS_INS 4=ALM 5=UART_EXT 6=UART_INS
     longint n_iss, n_iss_iv, n_iss_c;
     longint n_emit_eu, n_emit_dma, n_done_eu, n_done_dma;
@@ -423,7 +424,7 @@ module tb_top;
             cyc_cnt = 0;
             meas_cyc = 0;
             n_cre = 0; n_thdone = 0; n_koa_out = 0; n_ko_in = 0; n_ko_acc = 0;
-            n_ko_bp = 0; n_sbuf_ovf = 0;
+            n_ko_bp = 0; n_sbuf_ovf = 0; n_pre = 0;
             for (int f = 0; f < 7; f++) n_in_s[f] = 0;
             n_iss = 0; n_iss_iv = 0; n_iss_c = 0;
             n_emit_eu = 0; n_emit_dma = 0; n_done_eu = 0; n_done_dma = 0;
@@ -473,6 +474,8 @@ module tb_top;
                 end
                 if (u_if.u_e_vld && u_if.u_e_rdy) begin n_ko_in++; n_in_s[5]++; end
                 if (u_if.u_i_vld && u_if.u_i_rdy) begin n_ko_in++; n_in_s[6]++; end
+                // 带预读建线程（occ 门控生效对象计数）
+                if (|pre_vld) n_pre++;
                 // KOA 出口：出队（koaout=实际出队条数；ko_acc=被 THM 收下拍，
                 // ko_bp=被反压保持拍数——出口握手后无丢弃，koaout≈ko_acc）
                 if (u_if.out_new) n_koa_out++;
@@ -555,8 +558,8 @@ module tb_top;
                 if (cum >= tgt) begin p99 = b * LAT_BW; break; end
             end
         end
-        $display("BENCH_CSV tag=%0s seed=%0d cyc=%0d cre=%0d thdone=%0d ko_in=%0d koaout=%0d ko_acc=%0d ko_bp=%0d sbuf_ovf=%0d iss=%0d iss_iv=%0d iss_c=%0d emiteu=%0d emitdma=%0d doneeu=%0d donedma=%0d iss_util=%.3f eu_util=%.3f dse_util=%.3f pool_avg=%.2f buf_avg=%.2f q0_avg=%.2f q1_avg=%.2f ct_avg=%.2f fifo_avg=%.2f rba_min=%0d/%0d/%0d/%0d rba_bp_cyc=%0d fifo_full_cyc=%0d lat_avg=%.1f lat_p50=%0d lat_p99=%0d lat_max=%0d lat_n=%0d",
-                 bench_tag, bench_seed, meas_cyc, n_cre, n_thdone, n_ko_in,
+        $display("BENCH_CSV tag=%0s seed=%0d cyc=%0d cre=%0d thdone=%0d pre=%0d ko_in=%0d koaout=%0d ko_acc=%0d ko_bp=%0d sbuf_ovf=%0d iss=%0d iss_iv=%0d iss_c=%0d emiteu=%0d emitdma=%0d doneeu=%0d donedma=%0d iss_util=%.3f eu_util=%.3f dse_util=%.3f pool_avg=%.2f buf_avg=%.2f q0_avg=%.2f q1_avg=%.2f ct_avg=%.2f fifo_avg=%.2f rba_min=%0d/%0d/%0d/%0d rba_bp_cyc=%0d fifo_full_cyc=%0d lat_avg=%.1f lat_p50=%0d lat_p99=%0d lat_max=%0d lat_n=%0d",
+                 bench_tag, bench_seed, meas_cyc, n_cre, n_thdone, n_pre, n_ko_in,
                  n_koa_out, n_ko_acc, n_ko_bp, n_sbuf_ovf,
                  n_iss, n_iss_iv, n_iss_c, n_emit_eu, n_emit_dma, n_done_eu, n_done_dma,
                  iss_util, eu_util, dse_util,

@@ -106,6 +106,7 @@ TESTNAME=koa_smoke_test RUN_US=30 N_OH_PLANES=4 OH_SLOTS=9520 \
 | --- | --- | --- |
 | `SEED` | 不设（随机） | `$urandom` 种子（`+verilator+seed`），固定后结果可复现 |
 | `TPL_MASK` | 全开（0x3FF） | 可选模板位掩码（bit i = 模板 Ti），如 `64`=仅 T6（c 密集）、`128`=仅 T7（i/v+跳变） |
+| `PRE_OCC` | 3 | pre_read 占据 ts 数（1..4）：cur_ts 越过 ts0+PRE_OCC 需预读写完成 |
 | `BENCH_TAG` | bench | 结果行标签（收集多场景时区分） |
 | `MEAS_SKIP` | 2000 | 测量窗口跳过的预热拍数（复位后第 N 拍起统计到仿真结束） |
 
