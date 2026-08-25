@@ -19,7 +19,8 @@ WAVE_FILE=${WAVE_FILE:-wave.vcd}
 WAVE=${WAVE:-0}
 # benchmark 场景参数：SEED（$urandom 种子）/ TPL_MASK（可选模板位掩码，bit i=Ti）/
 # BENCH_TAG（结果行标签）/ MEAS_SKIP（测量窗口跳过的预热拍数）/
-# RW_MODE（读写返回模式：0=SMC 写10-20/读70-80 拍，1=L1 写5-10/读10-15 拍）/
+# RW_MODE（读写返回模式：0=SMC 写10-20/读70-80 拍；1=L1 写5-10/读10-15 拍；
+#          2=按优先级——线程 pri=0 走 L1，其余走 SMC）/
 # PRE_OCC（pre_read 占据 ts 数，默认 3，范围 1..4）
 SEED=${SEED:-}
 TPL_MASK=${TPL_MASK:-}

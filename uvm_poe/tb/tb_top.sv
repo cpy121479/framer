@@ -116,6 +116,7 @@ module tb_top;
     logic [15:0] emit_dma_tidx;
     logic [11:0] emit_dma_dma_id;
     logic [7:0] emit_dma_tag;
+    logic [11:0] emit_dma_pri; // 4×3bit 线程优先级（→ dma_ctrl 按优先级模式）
     logic [3:0] emit_dma_op;
     logic [3:0] dma_full;
     logic [3:0] rba_bp;
@@ -128,18 +129,20 @@ module tb_top;
     logic [23:0] rw_done_tid;
     logic [15:0] rw_done_tidx;
     logic [11:0] rw_done_dma;
-    // 读写返回模式：0=SMC（写10-20/读70-80拍）/ 1=L1（写5-10/读10-15拍）
-    logic rw_mode;
+    // 读写返回模式：0=SMC（写10-20/读70-80拍）/ 1=L1（写5-10/读10-15拍）/
+    // 2=按优先级（线程 pri=0 走 L1，其余走 SMC）
+    logic [1:0] rw_mode;
     initial begin
         automatic int m = 0;
         void'($value$plusargs("RW_MODE=%d", m));
-        rw_mode = m[0];
+        rw_mode = m[1:0];
     end
 
     poe_thm #(.MAX_THREADS(64)) u_thm (
     .clk(clk), .rst_n(rst_n),
     .ko_vld(u_if.out_vld),
     .ko_stream(u_if.out_stream), .ko_cid(u_if.out_cid), .ko_pos(u_if.out_pos),
+    .ko_pri(u_if.out_pri),
     .ko_pre_vld(u_if.out_pre_vld), .ko_dma_addr(u_if.out_dma_addr), .ko_pre_op(u_if.out_pre_op),
     .ko_rdy(ko_rdy),
     .ready_mask(ready_mask),
@@ -209,7 +212,8 @@ module tb_top;
     .eu1_ack(eu1_ack),
     .emit_dma_vld(emit_dma_vld), .emit_dma_tid(emit_dma_tid),
     .emit_dma_tidx(emit_dma_tidx), .emit_dma_dma_id(emit_dma_dma_id),
-    .emit_dma_tag(emit_dma_tag), .emit_dma_op(emit_dma_op),
+    .emit_dma_tag(emit_dma_tag), .emit_dma_pri(emit_dma_pri),
+    .emit_dma_op(emit_dma_op),
     .dma_full(dma_full),
     .dma_done_vld(dma_done_vld), .dma_done_tid(dma_done_tid),
     .dma_done_tidx(dma_done_tidx),
@@ -241,6 +245,7 @@ module tb_top;
     .push_tidx(emit_dma_tidx),
     .push_dma_id(emit_dma_dma_id),
     .push_tag(emit_dma_tag),
+    .push_pri(emit_dma_pri),
     .push_op(emit_dma_op),
     .rw_mode(rw_mode),
     .fifo_full(dma_full),

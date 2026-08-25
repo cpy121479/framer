@@ -18,8 +18,10 @@ module poe_dma_ctrl #(
     input logic [11:0] push_dma_id,
     input logic [7:0] push_tag,
     input logic [3:0] push_op,
-    // ---- 读写返回模式：0=SMC（写 10-20/读 70-80 拍）/ 1=L1（写 5-10/读 10-15 拍）----
-    input logic rw_mode,
+    input logic [11:0] push_pri, // 4×3bit 线程优先级（按优先级模式解析用）
+    // ---- 读写返回模式：0=SMC（写 10-20/读 70-80 拍）/ 1=L1（写 5-10/读 10-15 拍）/
+    //      2=按优先级（线程 pri=0 走 L1，其余走 SMC）----
+    input logic [1:0] rw_mode,
     // ---- 满状态（→ burst_sch 反压） ----
     output logic [3:0] fifo_full,
     // ---- RBA 状态（观测用） ----
@@ -42,6 +44,7 @@ module poe_dma_ctrl #(
         logic [2:0] dma_id;
         logic [1:0] tag;
         logic op;
+        logic [2:0] pri; // 线程优先级（按优先级模式解析读写延迟）
     } ct_fifo_item_t;
 
     localparam int PT_W = $clog2(FIFO_DEPTH);
@@ -96,6 +99,8 @@ module poe_dma_ctrl #(
     .clk(clk), .rst_n(rst_n),
     .req_vld({pop_vld[3], pop_vld[2], pop_vld[1], pop_vld[0]}),
     .req_op(pop_op),
+    .req_prio({f_mem[3][f_head[3]].pri, f_mem[2][f_head[2]].pri,
+               f_mem[1][f_head[1]].pri, f_mem[0][f_head[0]].pri}),
     .rw_mode(rw_mode),
     .rdy(rba_rdy),
     .cnt(rba_cnt_i)
@@ -125,7 +130,8 @@ module poe_dma_ctrl #(
                                             push_tidx[d*4 +: 4],
                                             push_dma_id[d*3 +: 3],
                                             push_tag[d*2 +: 2],
-                                            push_op[d]};
+                                            push_op[d],
+                                            push_pri[d*3 +: 3]};
                     f_tail[d] <= (f_tail[d] == FIFO_DEPTH-1) ? '0 : f_tail[d] + 1'b1;
                 end
                 // 出队（模型化消化，每拍 1 个）
@@ -155,14 +161,16 @@ module poe_dma_ctrl #(
                     end
                     if (pop) begin
                         automatic rw_ent_t r;
+                        automatic int em;
                         automatic int dmin;
                         automatic int dmax;
                         r.tid = f_mem[d][f_head[d]].tid;
                         r.tidx = f_mem[d][f_head[d]].tidx;
                         r.dma_id = f_mem[d][f_head[d]].dma_id;
                         r.op = f_mem[d][f_head[d]].op;
-                        dmin = rw_delay_min(rw_mode, r.op);
-                        dmax = rw_delay_max(rw_mode, r.op);
+                        em = rw_eff_mode(rw_mode, f_mem[d][f_head[d]].pri);
+                        dmin = rw_delay_min(em, r.op);
+                        dmax = rw_delay_max(em, r.op);
                         r.remain = dmin[6:0] + ($urandom % (dmax - dmin + 1));
                         rw_q[d][wr] = r;
                         wr++;

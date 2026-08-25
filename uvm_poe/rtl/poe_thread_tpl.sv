@@ -555,7 +555,7 @@ package poe_thread_tpl_pkg;
             end
         t = '0;
         t.ts_cnt = 5'd16;
-        t.pri = 3'd1 + ($urandom % 3); // 1..3
+        t.pri = 3'd0; // 废弃占位：线程优先级由 THM 继承 KO 报文 pri
         t.ts_bs[3:0] = 4'd1; // ts0：固定 1 条 i_task
         t.ts_id[0 +: 6] = 6'd0;
         t.burst_seq[0 +: BURST_W] = tpl_iv(1'b1, 3'd1, 1'b0, 1'b0, 3'd0);

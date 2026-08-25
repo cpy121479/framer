@@ -13,7 +13,8 @@
   `out_pri/out_src(=优先级组号)/out_stream/out_cid/out_pos/pre_read`。
 - **THM**：保序（同 `(stream,cid,pos)` 活跃线程 → 8 深缓存 FIFO 放行；不能建线程
   且缓存满才 `ko_rdy=0`）+ 线程状态机（IDLE→READY→ISSUED→DONE）+ CSR + ts 级互斥锁
-  （16 个，仅一级发射阻塞）；线程描述取自**来源模板库**（TPL_MASK 全开时：fgOTN
+  （16 个，仅一级发射阻塞）；线程优先级**继承 KO 报文 pri**（模板 pri 废弃）；
+  线程描述取自**来源模板库**（TPL_MASK 全开时：fgOTN
   EXT/INS 按 stream+pos 匹配实测 c_task 均值 41~52/10~17，APS 3/3、ALM 4、UART
   20/15；16 ts、U 形 c_task 分布——首尾 ts 多中间少；每 ts i_task 随机 1~8，
   变体 0 不跳转、其余 20% 跳变率），或通用池 T0~T9
@@ -37,7 +38,7 @@
   `rw_done{tid,tidx,dma_id}`（THM occ_ts 门控：c_task 占据 ts..ts+occ-1，occ 随机
   1-4，cur_ts 越过 ts+occ 及 T_DONE 需读写完成）。
 - **RBA**：4 个读写机会计数（初始 64）；dma 出队 1 个 c_task = 1 次读/写请求 →
-  计数 -1，按模式/操作延迟后归还 +1（SMC：写 10-20/读 70-80；L1：写 5-10/读 10-15，
+  计数 -1，按模式/操作延迟后归还 +1（SMC：写 10-20/读 70-80；L1：写 5-10/读 10-15；按优先级：线程 pri=0 走 L1 其余 SMC，
   `+RW_MODE` 选择，默认 SMC）；计数为 0 反压（停止出队 → FIFO 满 → 二级发射反压）。
 - **br 字段预留**：真实 ts 跳转由模板 `ts_id` 不连续标记。
 

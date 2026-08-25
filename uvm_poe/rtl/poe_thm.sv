@@ -36,6 +36,7 @@ module poe_thm #(
     input logic [2:0] ko_stream, // 来源流 0..6
     input logic [CID_W-1:0] ko_cid,
     input logic [2:0] ko_pos,
+    input logic [2:0] ko_pri, // KO 报文优先级（线程优先级继承此值，0 最高）
     input logic [3:0] ko_pre_vld, // 预读入口指示（4 组，随 KO 报文）
     input logic [79:0] ko_dma_addr, // 预读入口 smc 地址（4×20bit）
     input logic [3:0] ko_pre_op, // 预读入口操作类型（4×1bit）
@@ -67,7 +68,7 @@ module poe_thm #(
     input logic [23:0] rw_done_tid,
     input logic [15:0] rw_done_tidx,
     input logic [11:0] rw_done_dma,
-    input logic rw_mode, // 读写返回模式（0=SMC/1=L1，pre_read 完成延迟查表用）
+    input logic [1:0] rw_mode, // 读写返回模式（0=SMC/1=L1/2=按优先级，pre_read 查表用）
     // ---- burst_sch 二级发射通知（打拍起点，占位） ----
     input logic emit_vld,
     input logic [5:0] emit_tid,
@@ -191,7 +192,7 @@ module poe_thm #(
     localparam int CW_W = 384;
     // 预读字段（随报文缓存）：{pre_vld(4), dma_addr(80), op(4)}
     localparam int PRE_VEC_W = 88;
-    localparam int PKG_W = PRE_VEC_W + ST_W + CID_W + 3; // 88+3+17+3 = 111
+    localparam int PKG_W = PRE_VEC_W + ST_W + CID_W + 3 + 3; // 88+3+17+3+3 = 114
     localparam int PRE_VLD_MSB = PKG_W - 1;
     localparam int PRE_ADDR_MSB = PKG_W - 5;
     localparam int PRE_OP_MSB = PKG_W - 85;
@@ -463,10 +464,12 @@ module poe_thm #(
                     st = buf_mem[buf_head][ST_MSB -: ST_W];
                     c = buf_mem[buf_head][CID_MSB -: CID_W];
                     p = buf_mem[buf_head][POS_MSB -: 3];
+                    pr = buf_mem[buf_head][2:0];
                 end else if (ko_vld && ko_rdy &&
                     !key_active(ko_stream, ko_cid, ko_pos) && t >= 0) begin
                     from_buf = 1'b0;
                     st = ko_stream; c = ko_cid; p = ko_pos;
+                    pr = ko_pri; // 线程优先级继承 KO 报文优先级（0 最高）
                 end
                 if (t >= 0 && (from_buf || (ko_vld && ko_rdy &&
                 !key_active(ko_stream, ko_cid, ko_pos)))) begin
@@ -479,7 +482,7 @@ module poe_thm #(
                     ts = tpl.ts_cnt;
                     bs = tpl.ts_bs;
                     tid_vec = tpl.ts_id;
-                    pr = tpl.pri;
+                    // pr = 线程优先级（继承 KO 报文 pri，见上；模板 pri 字段废弃）
                     bp = tpl.burst_seq;
                     vtsk = tpl.vtsk_c;
                     dc = tpl.dma_c;
@@ -555,8 +558,9 @@ module poe_thm #(
                         automatic logic [7:0] pd = 8'd0;
                         for (int g = 0; g < 4; g++)
                             if (src_pre_vld[g]) begin
-                                automatic int dmin = rw_delay_min(rw_mode, src_pre_op[g]);
-                                automatic int dmax = rw_delay_max(rw_mode, src_pre_op[g]);
+                        automatic int em = rw_eff_mode(rw_mode, pr);
+                        automatic int dmin = rw_delay_min(em, src_pre_op[g]);
+                        automatic int dmax = rw_delay_max(em, src_pre_op[g]);
                                 automatic int d = dmin + ($urandom % (dmax - dmin + 1));
                                 if (d[7:0] > pd) pd = d[7:0];
                             end
@@ -575,7 +579,7 @@ module poe_thm #(
             if (ko_vld && ko_rdy &&
             key_active(ko_stream, ko_cid, ko_pos) && !buf_full) begin
                 buf_mem[buf_tail] <= {ko_pre_vld, ko_dma_addr, ko_pre_op,
-                ko_stream, ko_cid, ko_pos};
+                ko_stream, ko_cid, ko_pos, ko_pri};
                 buf_tail <= (buf_tail == BUF_DEPTH-1) ? '0 : buf_tail + 1'b1;
                 buf_cnt <= buf_cnt + 1'b1;
             end

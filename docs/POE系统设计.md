@@ -54,7 +54,7 @@ burst_sch（二级发射：q0→EU0 / q1→EU1 各自按优先级选；4 个 DSE
 
 | 字段 | 位宽 | 含义 |
 | --- | --- | --- |
-| pri |3bit | 调度优先级（0 最高），决定 KOA 段号 |
+| pri |3bit | 调度优先级（0 最高）：决定 KOA 段号，并被 THM 继承为线程优先级 |
 | stream | 3bit | 来源流 0..6（保序键之一） |
 | cid | 17bit | 通道号（1 时隙粒度，保序键之二） |
 | pos | 3bit | 开销位置（保序键之三） |
@@ -88,7 +88,8 @@ burst_sch（二级发射：q0→EU0 / q1→EU1 各自按优先级选；4 个 DSE
 - burst 的 `branch`（br）为**预留**标记（可能跳转）；真实跳转由模板的
   `ts_id` 不连续标记（带 br 的 ts 其后 ts_id 跳变）；
 - 每 ts 首个 burst（st=1）可声明 ts 级锁操作；
-- 线程描述（ts 数/编号/burst 模式/pri/vtsk_c/dma_c/cw）由 THM 从模板池随机选取。
+- 线程描述（ts 数/编号/burst 模式/vtsk_c/dma_c/cw）由 THM 从模板池随机选取
+  （优先级不在描述内——继承 KO 报文 pri）。
 
 ### 3.4 CSR 表项（每线程）
 
@@ -165,7 +166,9 @@ C 窗结构（`c_wnd_entry_t`，168bit：`tag(20)/c_line(128)/d/o/r/cnt(9)/ind(8
   其余 3 个按 20% 跳变率（15 个 ts 边界随机取 3 个，ts_id 跳 1~2，触发 4+t 等待）；
 - **通用池**（`TPL_MASK` 收窄时，benchmark 场景控制用）：`T0~T9` 共 10 个模板，
   掩码内均匀随机；
-- 解出 ts_cnt / 每 ts burst 数 / ts 编号 / pri / burst 模式 / vtsk_c / dma_c / cw；
+- 解出 ts_cnt / 每 ts burst 数 / ts 编号 / burst 模式 / vtsk_c / dma_c / cw；
+- **线程优先级继承 KO 报文 pri**（`th_pri_r = ko_pri`，0 最高；保序缓存随报文
+  存储 pri，模板 pri 字段废弃）——一级发射调度与按优先级读写模式分流均用它；
 - 同步生成 CSR 表项（th_stat=T_READY、cur_ts=ts_id[0] 等）。
 
 **pre_read 转发**：带预读的 KO 建线程时，同拍把 4 组 `{pre_vld, pre_tid,
@@ -265,7 +268,7 @@ c_task 留在缓存下拍重选）；每个 FIFO 每拍出队 1 个（模型化�
 
 - 4 个计数（每 DSE 1 个，对应 c_task FIFO），初始各 64 个读写机会；
 - dma 每出队 1 个 c_task（发起 1 次读/写请求），对应计数 -1；
-- 请求后按模式/操作随机延迟释放读写机会（SMC：写 10-20 / 读 70-80 拍；L1：写 5-10 / 读 10-15 拍，`+RW_MODE` 选择，默认 SMC），计数 +1；
+- 请求后按模式/操作随机延迟释放读写机会（SMC：写 10-20 / 读 70-80 拍；L1：写 5-10 / 读 10-15 拍；按优先级：线程 pri=0 走 L1、其余走 SMC，`+RW_MODE` 选择，默认 SMC），计数 +1；
 - 计数为 0 时 `rdy=0` 反压：dma_ctrl 停止出队 → FIFO 填满 → 二级发射被反压；
 - 参数：`CREDITS=64`、`DELAY_MIN=70`、`DELAY_MAX=75`，`rba_bp/rba_cnt` 可观测。
 
@@ -292,7 +295,7 @@ c_task 留在缓存下拍重选）；每个 FIFO 每拍出队 1 个（模型化�
 | c_task 缓存 | 16 深（解析后的单 task：pri/tid/tidx/ts/dma_id/tag/op） |
 | dma_ctrl c_task FIFO | 4 个（每 DSE 1 个，8 深；满则反压二级发射） |
 | RBA 读写机会 | 4 个计数（初始 64；请求 -1，按模式/操作延迟归还 +1；为 0 反压） |
-| 读写返回延迟 | SMC：写 10-20 / 读 70-80 拍；L1：写 5-10 / 读 10-15 拍，`+RW_MODE` 选择，默认 SMC |
+| 读写返回延迟 | SMC：写 10-20 / 读 70-80 拍；L1：写 5-10 / 读 10-15 拍；按优先级：线程 pri=0 走 L1、其余走 SMC，`+RW_MODE` 选择，默认 SMC |
 | 执行单元 | EU ×2（各 4 个 CU 桩）；c_task 无执行单元（二级发射即 done） |
 | burst 位宽 | 38bit |
 | 锁表 | 16 × 6bit |

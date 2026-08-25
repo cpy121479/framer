@@ -13,7 +13,8 @@ module poe_rba #(
     // ---- dma 读/写请求（每 DSE 每拍 ≤1）----
     input logic [N_CH-1:0] req_vld,
     input logic [N_CH-1:0] req_op, // 0=读（loc）/ 1=写（free）
-    input logic rw_mode, // 0=SMC / 1=L1（延迟表见 poe_types_pkg）
+    input logic [N_CH*3-1:0] req_prio, // 请求所属线程优先级（按优先级模式解析用）
+    input logic [1:0] rw_mode, // 0=SMC / 1=L1 / 2=按优先级（延迟表见 poe_types_pkg）
     // ---- 可发起（计数>0）；0=反压 ----
     output logic [N_CH-1:0] rdy,
     // ---- 当前读写机会数（观测用）----
@@ -55,10 +56,12 @@ module poe_rba #(
                         wr++;
                     end
                 end
-                // 2) 新请求入队（按模式/操作随机 [min,max] 拍释放）
+                // 2) 新请求入队（按模式/操作随机 [min,max] 拍释放；按优先级
+                //    模式下 pri=0 → L1，其余 → SMC）
                 if (issue) begin
-                    automatic int dmin = rw_delay_min(rw_mode, req_op[i]);
-                    automatic int dmax = rw_delay_max(rw_mode, req_op[i]);
+                    automatic int em = rw_eff_mode(rw_mode, req_prio[i*3 +: 3]);
+                    automatic int dmin = rw_delay_min(em, req_op[i]);
+                    automatic int dmax = rw_delay_max(em, req_op[i]);
                     ret_q[i][wr] <= dmin[6:0] + ($urandom % (dmax - dmin + 1));
                     wr++;
                 end

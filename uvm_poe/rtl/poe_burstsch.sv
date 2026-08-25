@@ -65,6 +65,7 @@ module poe_burstsch #(
     output logic [15:0] emit_dma_tidx,
     output logic [11:0] emit_dma_dma_id,
     output logic [7:0] emit_dma_tag,
+    output logic [11:0] emit_dma_pri, // 4×3bit 线程优先级（随 c_task 到 dma_ctrl）
     output logic [3:0] emit_dma_op,
     input logic [3:0] dma_full, // dma_ctrl c_task FIFO 满（满则反压本 DSE）
     // ---- c_task done（发射后 1 拍返回 THM，无需执行单元） ----
@@ -222,6 +223,7 @@ module poe_burstsch #(
             emit_dma_dma_id[d*3 +: 3] = emit_dma[d] ? ct_dma[ct_pick[d]*3 +: 3] : 3'd0;
             emit_dma_tag[d*2 +: 2] = emit_dma[d] ? ct_tag[ct_pick[d]*2 +: 2] : 2'd0;
             emit_dma_op[d] = emit_dma[d] ? ct_op[ct_pick[d]] : 1'b0;
+            emit_dma_pri[d*3 +: 3] = emit_dma[d] ? ct_pri[ct_pick[d]*3 +: 3] : 3'd0;
         end
         // 逐槽 ack（tag 唯一，最多一个 DSE 命中）
         for (int i = 0; i < CT_DEPTH; i++) begin
