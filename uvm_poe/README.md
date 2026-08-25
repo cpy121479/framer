@@ -35,8 +35,8 @@
   全部完成后聚合回 1 个 `eu_done`（按 burst 计）。
 - **dma_ctrl**：4 个 c_task FIFO（每 DSE 1 个，8 深，存 `{tid,tidx,dma_id,tag,op}`），
   每拍各出队 1 个（模型化消化腾空间）；出队即发起读写，按模式/操作延迟后上报
-  `rw_done{tid,tidx,dma_id}`（THM occ_ts 门控：c_task 占据 ts..ts+occ-1，occ 随机
-  1-4，cur_ts 越过 ts+occ 及 T_DONE 需读写完成）。
+  `rw_done{tid,tidx,dma_id}`（THM occ_ts 门控：c_task 占据 ts..ts+occ-1，occ 抽样
+  1-8 偏大分布（rw_occ_pick），cur_ts 越过 ts+occ 及 T_DONE 需读写完成）。
 - **RBA**：4 个读写机会计数（初始 64）；dma 出队 1 个 c_task = 1 次读/写请求 →
   计数 -1，按模式/操作延迟后归还 +1（SMC：写 10-20/读 70-80；L1：写 5-10/读 10-15；按优先级：线程 pri=0 走 L1 其余 SMC，
   `+RW_MODE` 选择，默认 SMC）；计数为 0 反压（停止出队 → FIFO 满 → 二级发射反压）。
@@ -107,7 +107,7 @@ TESTNAME=koa_smoke_test RUN_US=30 N_OH_PLANES=4 OH_SLOTS=9520 \
 | --- | --- | --- |
 | `SEED` | 不设（随机） | `$urandom` 种子（`+verilator+seed`），固定后结果可复现 |
 | `TPL_MASK` | 全开（0x3FF） | 可选模板位掩码（bit i = 模板 Ti），如 `64`=仅 T6（c 密集）、`128`=仅 T7（i/v+跳变） |
-| `PRE_OCC` | 3 | pre_read 占据 ts 数（1..4）：cur_ts 越过 ts0+PRE_OCC 需预读写完成 |
+| `PRE_OCC` | 3 | pre_read 占据 ts 数（1..8）：cur_ts 越过 ts0+PRE_OCC 需预读写完成 |
 | `BENCH_TAG` | bench | 结果行标签（收集多场景时区分） |
 | `MEAS_SKIP` | 2000 | 测量窗口跳过的预热拍数（复位后第 N 拍起统计到仿真结束） |
 
@@ -150,8 +150,10 @@ python bench/gui_server.py      # → 自动打开 http://localhost:8765
 - **指标输出**：关键指标卡片 + 四张图表——发射资源利用率（带理论上限虚线：
   一级 1.0 / EU 0.5 / DSE≈0.88）、资源占用（占容量百分比）、线程生命周期延迟
   （对数轴 avg/p50/p99/max）、吞吐构成（i/v 与 c 每拍堆叠）；
-- **历史结果表**：勾选任意多条 → 图表联动对比；校验列显示 通过/异常
-  （UVM_ERROR=0 且 idle=64）。
+- **历史结果表**：参数配置列（右上角 ⚙ 列设置勾选显示哪些，localStorage 记忆，
+  默认 种子/模板掩码/读写模式/pre occ/RUN_US）；勾选任意多条 → 图表联动对比；
+  校验列显示 通过/异常（UVM_ERROR=0 且 idle=64）；导出 CSV（勾选行，无勾选导全部，
+  含全部配置 + 指标字段，Excel 兼容 UTF-8 BOM）。
 
 结果持久化在 `bench/results.json`，运行日志在 `bench/logs/`。图表依赖 ECharts CDN，
 离线时图表区显示占位提示（表格与卡片不受影响）。

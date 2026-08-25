@@ -183,6 +183,35 @@ class Handler(http.server.BaseHTTPRequestHandler):
         else:
             self._send(404, {"error": "not found"})
 
+    def do_DELETE(self):
+        import urllib.parse
+        u = urllib.parse.urlparse(self.path)
+        if u.path != "/api/results":
+            self._send(404, {"error": "not found"})
+            return
+        qs = urllib.parse.parse_qs(u.query)
+        rid = (qs.get("id") or [""])[0]
+        if not rid:
+            self._send(400, {"ok": False, "msg": "缺少 id"})
+            return
+        data = load_results()
+        n0 = len(data["runs"])
+        run = next((r for r in data["runs"] if r.get("id") == rid), None)
+        data["runs"] = [r for r in data["runs"] if r.get("id") != rid]
+        if len(data["runs"]) == n0:
+            self._send(404, {"ok": False, "msg": "id 不存在"})
+            return
+        save_results(data)
+        # 顺带删除对应运行日志（仅限 bench/logs/ 内的文件）
+        if run and run.get("log"):
+            lp = (BENCH / run["log"]).resolve()
+            if lp.is_relative_to(LOG_DIR.resolve()) and lp.exists():
+                try:
+                    lp.unlink()
+                except Exception:
+                    pass
+        self._send(200, {"ok": True, "msg": f"已删除 {rid}"})
+
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(n) or b"{}") if n else {}

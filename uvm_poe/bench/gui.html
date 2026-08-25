@@ -61,6 +61,17 @@
   .sec { background:var(--card); border:1px solid var(--line); border-radius:8px;
          padding:10px 12px; margin-bottom:14px; }
   .sec h3 { margin:2px 0 8px; font-size:14px; }
+  .sechdr { display:flex; justify-content:space-between; align-items:flex-start; }
+  button.mini { padding:3px 10px; font-size:12px; margin-left:6px; }
+  button.mini.danger { color:var(--bad); border-color:var(--bad); }
+  button.del { padding:0 6px; font-size:11px; color:var(--sub); border:none;
+               background:none; cursor:pointer; }
+  button.del:hover { color:var(--bad); }
+  .popover { display:none; position:absolute; right:0; top:30px; z-index:30;
+             background:#fff; border:1px solid var(--line); border-radius:8px;
+             padding:8px 12px; box-shadow:0 4px 16px rgba(0,0,0,.12);
+             font-size:12px; min-width:130px; }
+  .popover label { display:block; margin:3px 0; cursor:pointer; }
   .spin { display:inline-block; width:12px; height:12px; border:2px solid var(--acc);
           border-top-color:transparent; border-radius:50%; animation:r 0.8s linear infinite;
           vertical-align:-2px; margin-right:6px; }
@@ -116,8 +127,8 @@
           <option value="1">L1（写5-10 / 读10-15拍）</option>
           <option value="2">按优先级（pri0→L1，其余→SMC）</option>
         </select></label>
-      <label class="f">pre_read occ_ts<span class="hint">1-4</span>
-        <input type="number" id="pre_occ" value="3" min="1" max="4"></label>
+      <label class="f">pre_read occ_ts<span class="hint">1-8</span>
+        <input type="number" id="pre_occ" value="3" min="1" max="8"></label>
     </div>
 
     <button class="primary" id="runbtn" onclick="runSim()">运行场景</button>
@@ -137,12 +148,16 @@
       <div class="chart"><div class="inner" id="ch_tp"></div></div>
     </div>
     <div class="sec" style="margin-top:14px">
-      <h3>历史结果（勾选后图表联动对比）</h3>
-      <table id="tbl"><thead><tr>
-        <th></th><th>时间</th><th>标签</th><th>种子</th><th>模板掩码</th><th>窗口拍</th>
-        <th>线程完成</th><th>iss_util</th><th>eu_util</th><th>dse_util</th>
-        <th>p50</th><th>p99</th><th>lat_max</th><th>校验</th>
-      </tr></thead><tbody></tbody></table>
+      <div class="sechdr">
+        <h3 style="margin:2px 0 8px">历史结果（勾选后图表联动对比）</h3>
+        <div style="position:relative">
+          <button class="mini" onclick="toggleColCfg(event)">⚙ 列设置</button>
+          <button class="mini" onclick="exportCsv()">导出 CSV</button>
+          <button class="mini danger" onclick="delSelected()">删除选中</button>
+          <div id="colcfg" class="popover"></div>
+        </div>
+      </div>
+      <table id="tbl"><thead><tr></tr></thead><tbody></tbody></table>
     </div>
   </div>
 </div>
@@ -248,7 +263,99 @@ async function refresh() {
   lastCount = results.length;
   renderTbl();
 }
+// ---- 历史结果：可配置参数列（区分测试场景）+ CSV 导出 ----
+const CFG_COLS = [
+  ["SEED", "种子", v => v ?? "-"],
+  ["TPL_MASK", "模板掩码", v => (v === undefined || v === "" || +v === 1023) ? "全开" : v],
+  ["RW_MODE", "读写模式", v => ["SMC", "L1", "按优先级"][+v || 0]],
+  ["PRE_OCC", "pre occ", v => v ?? 3],
+  ["RUN_US", "RUN_US(µs)", v => v ?? 50],
+  ["MEAS_SKIP", "预热拍", v => v ?? 2000],
+  ["N_OH_PLANES", "OH平面"], ["OH_SLOTS", "OH时隙"],
+  ["N_X2X_PLANES", "X2X平面"], ["X2X_SLOTS", "X2X时隙"],
+  ["N_CH", "通道"], ["UART_MPPS", "串口Mpps"],
+  ["TESTNAME", "测试"],
+];
+let cfgVis;
+try { cfgVis = JSON.parse(localStorage.getItem("poe_cfg_cols")); } catch (e) { cfgVis = null; }
+if (!cfgVis)
+  cfgVis = Object.fromEntries(
+    ["SEED", "TPL_MASK", "RW_MODE", "PRE_OCC", "RUN_US"].map(k => [k, true]));
+
+function toggleColCfg(ev) {
+  ev.stopPropagation();
+  const p = document.getElementById("colcfg");
+  if (p.style.display === "block") { p.style.display = "none"; return; }
+  p.innerHTML = CFG_COLS.map(([k, lab]) =>
+    `<label><input type="checkbox" ${cfgVis[k] ? "checked" : ""}` +
+    ` onchange="colToggle('${k}', this.checked)"> ${lab}</label>`).join("");
+  p.onclick = e => e.stopPropagation();
+  p.style.display = "block";
+}
+function colToggle(k, v) {
+  cfgVis[k] = v;
+  localStorage.setItem("poe_cfg_cols", JSON.stringify(cfgVis));
+  renderTbl();
+}
+document.addEventListener("click", () => {
+  const p = document.getElementById("colcfg");
+  if (p) p.style.display = "none";
+});
+
+function exportCsv() {
+  const sel = selected();
+  const rows = sel.length ? results.filter(r => sel.includes(r.id)) : results;
+  if (!rows.length) { alert("无结果可导出"); return; }
+  const cfgKeys = CFG_COLS.map(([k]) => k);
+  const mkeys = [];
+  rows.forEach(r => Object.keys(r.metrics || {}).forEach(k => {
+    if (!mkeys.includes(k)) mkeys.push(k);
+  }));
+  const esc = v => {
+    v = (v === undefined || v === null) ? "" : String(v);
+    return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  };
+  const lines = [["id", "时间", ...cfgKeys, ...mkeys, "校验"].map(esc).join(",")];
+  rows.forEach(r => {
+    lines.push([r.id, r.ts,
+      ...cfgKeys.map(k => r.cfg?.[k] ?? ""),
+      ...mkeys.map(k => r.metrics?.[k] ?? ""),
+      r.checks?.ok ? "通过" : "异常"].map(esc).join(","));
+  });
+  const blob = new Blob(["\uFEFF" + lines.join("\r\n")],
+                        { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "poe_bench_" +
+    new Date().toISOString().replace(/[:T]/g, "-").slice(0, 16) + ".csv";
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+async function delRun(id) {
+  const r = runById(id);
+  if (!confirm(`删除记录「${(r?.metrics?.tag) || id}」及其日志？`)) return;
+  await fetch("/api/results?id=" + encodeURIComponent(id), { method: "DELETE" });
+  await refresh();
+  renderAll();
+}
+async function delSelected() {
+  const sel = selected();
+  if (!sel.length) { alert("先勾选要删除的行"); return; }
+  if (!confirm(`删除选中的 ${sel.length} 条记录及其日志？`)) return;
+  for (const id of sel)
+    await fetch("/api/results?id=" + encodeURIComponent(id), { method: "DELETE" });
+  await refresh();
+  renderAll();
+}
+
 function renderTbl() {
+  const vis = CFG_COLS.filter(([k]) => cfgVis[k]);
+  document.querySelector("#tbl thead tr").innerHTML =
+    `<th></th><th>时间</th><th>标签</th>` +
+    vis.map(([, lab]) => `<th>${lab}</th>`).join("") +
+    `<th>窗口拍</th><th>线程完成</th><th>iss_util</th><th>eu_util</th>` +
+    `<th>dse_util</th><th>p50</th><th>p99</th><th>lat_max</th><th>校验</th><th></th>`;
   const tb = document.querySelector("#tbl tbody");
   tb.innerHTML = "";
   results.slice().reverse().forEach(r => {
@@ -256,18 +363,22 @@ function renderTbl() {
     const num = k => (m[k] !== undefined ? +m[k] : null);
     const tr = document.createElement("tr");
     const checked = selected().includes(r.id) ? "checked" : "";
-    const mask = r.cfg && r.cfg.TPL_MASK ? r.cfg.TPL_MASK : "全";
     const badge = r.checks && r.checks.ok
       ? '<span class="badge ok">通过</span>'
       : '<span class="badge bad">异常</span>';
     const f = (v, d=3) => v==null ? "-" : v.toFixed(d);
     tr.innerHTML =
       `<td><input type="checkbox" ${checked} onchange="renderAll()" data-id="${r.id}"></td>` +
-      `<td>${r.ts}</td><td><b>${m.tag||r.id}</b></td><td>${m.seed??"-"}</td><td>${mask}</td>` +
+      `<td>${r.ts}</td><td><b>${m.tag||r.id}</b></td>` +
+      vis.map(([k, , fmt]) => {
+        const v = (r.cfg || {})[k];
+        return `<td>${fmt ? fmt(v) : (v ?? "-")}</td>`;
+      }).join("") +
       `<td>${num("cyc")??"-"}</td><td>${num("thdone")??"-"}</td>` +
       `<td>${f(num("iss_util"))}</td><td>${f(num("eu_util"))}</td><td>${f(num("dse_util"))}</td>` +
       `<td>${num("lat_p50")??"-"}</td><td>${num("lat_p99")??"-"}</td><td>${num("lat_max")??"-"}</td>` +
-      `<td>${badge}</td>`;
+      `<td>${badge}</td>` +
+      `<td><button class="del" title="删除" onclick="delRun('${r.id}')">✕</button></td>`;
     tb.appendChild(tr);
   });
 }
@@ -320,19 +431,28 @@ function drawCards(ids) {
     (sub?`<div class="u">${sub}</div>`:"") + `</div></div>`).join("");
 }
 
+// 系列 = 每个选中 run（类目 = 资源），修复此前系列/类目颠倒导致的错位；
+// 单 run 时 colorBy:"data"（按资源着色），多 run 时按系列着色（每 run 一色）
+function runBar(ids, keys) {
+  const cb = ids.length === 1 ? "data" : "series";
+  return ids.map(i => ({ name: runById(i)?.metrics?.tag || i, type: "bar",
+    colorBy: cb,
+    data: keys.map(k => { const m = (runById(i)||{}).metrics || {};
+      return m[k] !== undefined ? +m[k] : null; }) }));
+}
 function drawUtil(ids) {
   const c = mkChart("ch_util"); if (!c) return noEcharts("ch_util");
   c.setOption({
     title:{text:"发射资源利用率（vs 理论上限）",left:8,top:4,textStyle:{fontSize:13}},
-    tooltip:{}, legend:{top:4,right:8},
-    grid:{left:44,right:14,top:44,bottom:26},
+    tooltip:{}, legend:{top:4,right:8,orient:"vertical",itemGap:4},
+    grid:{left:44,right:110,top:44,bottom:26},
     xAxis:{type:"category",data:["一级发射 ÷2/拍","EU ÷2/拍","DSE ÷4/拍"]},
     yAxis:{max:1.0},
-    series:[ barSeries(ids,"iss_util","iss_util"),
-             barSeries(ids,"eu_util","eu_util"),
-             barSeries(ids,"dse_util","dse_util"),
-             { name:"理论上限", type:"line", data:[CAP.iss,CAP.eu,CAP.dse],
-               symbol:"none", lineStyle:{type:"dashed",color:"#d64541"} } ]
+    series: [ ...runBar(ids, ["iss_util","eu_util","dse_util"]),
+             { name:"理论上限", type:"line", step:"middle",
+               data:[CAP.iss,CAP.eu,CAP.dse],
+               symbol:"none", lineStyle:{type:"dashed",color:"#d64541"},
+               tooltip:{show:false} } ]
   }, true);
 }
 function drawOcc(ids) {
@@ -342,21 +462,23 @@ function drawOcc(ids) {
       ct_avg:"c_task缓存",fifo_avg:"dma FIFO"}[k]));
   c.setOption({
     title:{text:"资源占用（占容量 %，时间平均）",left:8,top:4,textStyle:{fontSize:13}},
-    tooltip:{formatter:p=>`${p.name}：${(p.value).toFixed(1)}%`}, legend:{top:4,right:8},
-    grid:{left:44,right:14,top:44,bottom:26},
+    tooltip:{formatter:p=>`${p.seriesName} @${p.name}：${(p.value).toFixed(1)}%`},
+    legend:{top:4,right:8,orient:"vertical",itemGap:4},
+    grid:{left:44,right:110,top:44,bottom:26},
     xAxis:{type:"category",data:names},
     yAxis:{max:100,axisLabel:{formatter:"{value}%"}},
-    series: OCC_CAP.map(([k,cap]) => ({ name:k, type:"bar",
-      data: ids.map(i => { const m=(runById(i)||{}).metrics||{};
-        return m[k]!==undefined ? +(100*m[k]/cap).toFixed(1) : null; }) }))
+    series: ids.map(i => ({ name: runById(i)?.metrics?.tag || i, type:"bar",
+      colorBy: ids.length === 1 ? "data" : "series",
+      data: OCC_CAP.map(([k,cap]) => { const m = (runById(i)||{}).metrics || {};
+        return m[k] !== undefined ? +(100*m[k]/cap).toFixed(1) : null; }) }))
   }, true);
 }
 function drawLat(ids) {
   const c = mkChart("ch_lat"); if (!c) return noEcharts("ch_lat");
   c.setOption({
     title:{text:"线程生命周期延迟（拍，对数轴）",left:8,top:4,textStyle:{fontSize:13}},
-    tooltip:{}, legend:{top:4,right:8},
-    grid:{left:54,right:14,top:44,bottom:26},
+    tooltip:{}, legend:{top:4,right:8,orient:"vertical",itemGap:4},
+    grid:{left:54,right:110,top:44,bottom:26},
     xAxis:{type:"category",data:runNames(ids)},
     yAxis:{type:"log"},
     series:[ barSeries(ids,"lat_avg","avg"), barSeries(ids,"lat_p50","p50"),
@@ -367,8 +489,8 @@ function drawTp(ids) {
   const c = mkChart("ch_tp"); if (!c) return noEcharts("ch_tp");
   c.setOption({
     title:{text:"吞吐构成（每拍发射数，堆叠）",left:8,top:4,textStyle:{fontSize:13}},
-    tooltip:{}, legend:{top:4,right:8},
-    grid:{left:44,right:14,top:44,bottom:26},
+    tooltip:{}, legend:{top:4,right:8,orient:"vertical",itemGap:4},
+    grid:{left:44,right:110,top:44,bottom:26},
     xAxis:{type:"category",data:runNames(ids)},
     yAxis:{name:"/拍"},
     series:[ Object.assign(barSeries(ids,"iss_iv","i/v 发射"),{stack:"t"}),
