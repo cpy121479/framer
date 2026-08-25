@@ -65,7 +65,7 @@ package poe_thread_tpl_pkg;
     endfunction
 
     // c_task burst（38bit，单任务；dma_id 与 cw 配对；occ0 参数为占位——
-    // THM 建线程时对 occ_ts 运行时随机 1-4 覆盖）
+    // THM 建线程时对 occ_ts 运行时抽样 1-8 偏大分布覆盖）
     function automatic logic [BURST_W-1:0] tpl_c(
         input logic st, input logic [2:0] dma0, input logic [7:0] occ0);
         burst_c_t b;

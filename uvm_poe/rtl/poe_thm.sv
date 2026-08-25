@@ -10,7 +10,7 @@
 //   cur_ts 仅由 eu_done/dma_done 统计推进，一级队列可含 cur_ts 及更靠后 ts 的 burst；
 //   ts 完成判据 = done 事件数 ≥ 预期值 th_dneed（i/v burst 计 1、c_task burst 按有效
 //   task 数计，空 c_task burst 计 0、不占 DSE 发射机会），th_dneed=0 的 ts 无事件，
-//   由每拍兜底检查推进；occ_ts 门控：c_task 占据 ts..ts+occ-1（occ 随机 1-4），
+//   由每拍兜底检查推进；occ_ts 门控：c_task 占据 ts..ts+occ-1（occ 随机 1-8 偏大分布，rw_occ_pick），
 //   cur_ts 越过 ts+occ 需其读写完成（dma_ctrl rw_done，70~75 拍），T_DONE 前全部
 //   读写须完成
 // - 建线程时同步生成 CSR 表项（csr_t，th_id 6bit、cw 8×6B），th_stat/cur_ts 与状态机
@@ -106,17 +106,17 @@ module poe_thm #(
     logic [3:0] th_need [MAX_THREADS][MAX_TS]; // 每 ts 实际执行 burst 数（= ts_bs，≤8）
     logic [4:0] th_dneed [MAX_THREADS][MAX_TS]; // 每 ts 预期 done 事件数（i/v=1 / c=有效 task 数，空 c_task=0）
     logic [7:0] th_rw_m [MAX_THREADS][MAX_TS]; // 每 ts 未完成读写位图（bit0..6=dma_id，bit7=pre_read）
-    logic [15:0] th_occ_r [MAX_THREADS][MAX_TS]; // 每 ts 各 id 的 occ-1（8×2bit；nibble7=pre_read）
+    logic [23:0] th_occ_r [MAX_THREADS][MAX_TS]; // 每 ts 各 id 的 occ-1（8×3bit；nibble7=pre_read）
     logic [7:0] th_pre_cnt [MAX_THREADS]; // pre_read 读写完成倒计时（模式/op 延迟）
 
-    // ---- pre_read 占据 ts 数：参数化（plusarg PRE_OCC，默认 3，范围 1..4）。
+    // ---- pre_read 占据 ts 数：参数化（plusarg PRE_OCC，默认 3，范围 1..8）。
     //      带预读线程的 cur_ts 越过 ts0+PRE_OCC 需预读写完成（同 c_task occ 门控）----
     int pre_occ_ts;
     initial begin
         pre_occ_ts = 3;
         void'($value$plusargs("PRE_OCC=%d", pre_occ_ts));
         if (pre_occ_ts < 1) pre_occ_ts = 1;
-        if (pre_occ_ts > 4) pre_occ_ts = 4;
+        if (pre_occ_ts > 8) pre_occ_ts = 8;
     end
     logic [7:0] th_off [MAX_THREADS][MAX_TS+1]; // 每 ts 起始累计偏移（off[k]=前 k 个 ts 的 need 和）
     logic [3:0] th_sel_ts [MAX_THREADS]; // bs_pc 所属 ts 序号（组合推导）
@@ -158,13 +158,13 @@ module poe_thm #(
     // cur_ts 越过 k+occ 前需其读写完成（dma_ctrl rw_done）；同 ts 多个未完成
     // task 取剩余者的最小 occ（最紧的屏障）----
     function automatic logic [3:0] rw_occ_min(input int i, input int k);
-        automatic logic [3:0] mn = 4'd5;
+        automatic logic [3:0] mn = 4'd9;
         for (int b = 0; b < 8; b++)
             if (th_rw_m[i][k][b]) begin
-                automatic logic [3:0] o = {2'b00, th_occ_r[i][k][b*2 +: 2]} + 4'd1;
+                automatic logic [3:0] o = {1'b0, th_occ_r[i][k][b*3 +: 3]} + 4'd1;
                 if (o < mn) mn = o;
             end
-        rw_occ_min = (mn == 4'd5) ? 4'd4 : mn; // 空 mask 不被调用（rw_blk 已判非空）
+        rw_occ_min = (mn == 4'd9) ? 4'd8 : mn; // 空 mask 不被调用（rw_blk 已判非空）
     endfunction
 
     // 从 nts 跨入 nts+1 是否被未完成读写阻挡：∃ k，pending(k)≠0 且 k+occ_min(k) ≤ nts
@@ -509,21 +509,21 @@ module poe_thm #(
                                     dneed_k = dneed_k +
                                         {(cb.c0 || (cb.vld_cu && cb.c1)) ? 5'd1 : 5'd0};
                                 else begin
-                                    // occ_ts 运行时随机 1-4（覆盖模板值，回写 burst）
-                                    cb.occ_ts0 = 8'($urandom_range(1, 4));
-                                    cb.occ_ts1 = 8'($urandom_range(1, 4));
+                                    // occ_ts 运行时抽样 1-8 偏大分布（覆盖模板值，回写 burst）
+                                    cb.occ_ts0 = 8'(rw_occ_pick());
+                                    cb.occ_ts1 = 8'(rw_occ_pick());
                                     th_burst_r[t][k][m] <= cb;
                                     if (cb.c0 && dc[cb.dma_id0]) begin
                                         dneed_k = dneed_k + 5'd1;
                                         th_rw_m[t][k][cb.dma_id0] <= 1'b1;
-                                        th_occ_r[t][k][cb.dma_id0*2 +: 2] <=
-                                            cb.occ_ts0[1:0] - 2'd1;
+                                        th_occ_r[t][k][cb.dma_id0*3 +: 3] <=
+                                            cb.occ_ts0[2:0] - 3'd1;
                                     end
                                     if (cb.vld_cu && cb.c1 && dc[cb.dma_id1]) begin
                                         dneed_k = dneed_k + 5'd1;
                                         th_rw_m[t][k][cb.dma_id1] <= 1'b1;
-                                        th_occ_r[t][k][cb.dma_id1*2 +: 2] <=
-                                            cb.occ_ts1[1:0] - 2'd1;
+                                        th_occ_r[t][k][cb.dma_id1*3 +: 3] <=
+                                            cb.occ_ts1[2:0] - 3'd1;
                                     end
                                 end
                             end
@@ -565,7 +565,7 @@ module poe_thm #(
                                 if (d[7:0] > pd) pd = d[7:0];
                             end
                         th_rw_m[t][0][7] <= 1'b1;
-                        th_occ_r[t][0][7*2 +: 2] <= pre_occ_ts[1:0] - 2'd1;
+                        th_occ_r[t][0][7*3 +: 3] <= pre_occ_ts[2:0] - 3'd1;
                         th_pre_cnt[t] <= pd;
                     end
                     csr[t].cw <= cw;

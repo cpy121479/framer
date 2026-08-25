@@ -83,6 +83,27 @@ module tb_tpl_check;
             bad++;
         end else
             $display("IV constraints ok (ts0=1, ts1..15 iv in [1,8-c])");
+        // rw_occ_pick 分布自检：范围 1..8、E[occ]≈6.1、P(occ>=5)≈68%
+        begin
+            automatic int hist [9];
+            automatic int ns = 4000;
+            automatic int sum = 0;
+            automatic int big = 0;
+            for (int o = 0; o < 9; o++) hist[o] = 0;
+            for (int i = 0; i < ns; i++) begin
+                automatic int v = rw_occ_pick();
+                hist[v]++;
+                sum += v;
+                if (v >= 5) big++;
+            end
+            for (int o = 1; o <= 8; o++)
+                $write(" occ%0d:%2.1f%%", o, 100.0*hist[o]/ns);
+            $display;
+            $display("OCC avg=%4.2f (expect ~6.07) P(occ>=5)=%2.1f%% (expect ~78.6%%)",
+                     1.0*sum/ns, 100.0*big/ns);
+            if (hist[0] != 0 || 1.0*sum/ns < 5.5 || 1.0*sum/ns > 6.6 ||
+                100.0*big/ns < 74 || 100.0*big/ns > 84) bad++;
+        end
         for (int st = 0; st < 7; st += 2) begin
             automatic thread_tpl_t t = tpl_src(st, st < 2 ? 2 : 0);
             $write("SHAPE st=%0d (C=%0d, jumps=%0d) c/ts:", st, count_ct(t),

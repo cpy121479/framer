@@ -127,4 +127,13 @@ package poe_types_pkg;
         rw_delay_max = (mode == RW_MODE_L1) ? (op ? 10 : 15) : (op ? 20 : 80);
     endfunction
 
+    // ---- c_task occ_ts 抽样：范围 1..8，分布偏大（occ 本质描述先后依赖，
+    //      大 occ 给跨 ts 流水更多推进自由度）。权重 [1,1,2,2,3,4,6,9]/28：
+    //      E[occ]≈6.1，P(occ≥5)≈68%，P(occ=8)≈32% ----
+    function automatic int rw_occ_pick();
+        automatic int r = $urandom % 28;
+        rw_occ_pick = (r < 1) ? 1 : (r < 2) ? 2 : (r < 4) ? 3 : (r < 6) ? 4 :
+                      (r < 9) ? 5 : (r < 13) ? 6 : (r < 19) ? 7 : 8;
+    endfunction
+
 endpackage

@@ -76,7 +76,7 @@ burst_sch（二级发射：q0→EU0 / q1→EU1 各自按优先级选；4 个 DSE
 | burst_type / vld_cu | 1bit ×2 | 类型 / 需执行 task 数 |
 | tsk_id / dma_id | 3bit ×2 | 任务 id（查 CSR.vtsk_c / dma_c） |
 | c0 / c1 | 1bit ×2 | 任务有效标志 |
-| sub_pc / occ_ts | 8bit ×2 | i/v 指令指针 / c 占据 ts 数（**THM 建线程时随机 1-4**：cur_ts 越过 ts+occ 需该 task 读写完成） |
+| sub_pc / occ_ts | 8bit ×2 | i/v 指令指针 / c 占据 ts 数（**THM 建线程时抽样 1-8 偏大分布**：cur_ts 越过 ts+occ 需该 task 读写完成） |
 
 ### 3.3 线程结构
 
@@ -176,7 +176,7 @@ pre_dma_addr, pre_op}` 转发给 burst_sch 的 8 深 pre_buf（占位，吸收�
 `pre_buf_rdy=0`（快满）时带预读 KO 反压（`ko_rdy=0`），无预读 KO 不受影响。
 **pre_read occ 门控**：带预读线程登记 ts0 屏障（bit7），`cur_ts` 越过
 `ts0 + PRE_OCC` 需预读写完成（THM 本地按模式/op 延迟倒计时，取各使能组最大值）；
-`PRE_OCC` 参数化（plusarg，默认 3，范围 1..4），T_DONE 同样等待。
+`PRE_OCC` 参数化（plusarg，默认 3，范围 1..8），T_DONE 同样等待。
 
 ### 5.4 一级发射门控（ready_mask）
 
@@ -203,7 +203,8 @@ burst 为所属 ts **末条**且下一 ts 编号**不连续**（真实跳转标�
 - ts 完成判据：done 事件数 ≥ 预期 done 数 `th_dneed`（i/v burst 计 1，c_task burst
   按有效 task 数计，**空 c_task burst 计 0**），且该 ts burst 已全部发射；
   预期 done 数为 0 的 ts（如纯空 c_task）无 done 事件，由 THM 每拍兜底检查推进；
-- **occ_ts 门控**：c_task 占据 ts..ts+occ-1（occ 建线程时随机 1-4）；cur_ts 越过
+- **occ_ts 门控**：c_task 占据 ts..ts+occ-1（occ 建线程时抽样 1-8，权重偏大——
+  大 occ 为主，给跨 ts 流水更多推进自由度）；cur_ts 越过
   ts+occ 之后的 ts须等其**读写完成**（dma_ctrl 出队后按模式/操作延迟上报 rw_done，
   区别于发射即回的调度 done），同 ts 多个未完成 task 取剩余者最小 occ；
 - 当前 ts 完成 → 跨 ts（ts 编号跳转），末 ts 完成 → T_DONE（**T_DONE 需本线程
