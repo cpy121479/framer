@@ -1,0 +1,118 @@
+<div id="koPath">
+  <style>
+    #koPath { font-family: inherit; }
+    #koPath h3 { margin: 0 0 10px; }
+    #koPath .stages { display: flex; flex-wrap: wrap; gap: 6px; align-items: stretch; }
+    #koPath .stage {
+      flex: 1 1 132px; min-width: 118px;
+      background: var(--card); color: var(--card-foreground);
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 8px 10px; box-sizing: border-box;
+      transition: outline-color .15s;
+    }
+    #koPath .stage.active { outline: 2px solid var(--accent); outline-offset: 1px; }
+    #koPath .stage .sno { font-size: 12px; color: var(--muted-foreground); font-weight: 500; }
+    #koPath .stage .name { font-size: 13px; font-weight: 500; margin-top: 2px; }
+    #koPath .stage .sub { font-size: 11px; color: var(--muted-foreground); margin-top: 2px; }
+    #koPath .stage .tokens { min-height: 26px; margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap; }
+    #koPath .chip {
+      font-size: 11px; padding: 2px 8px; border-radius: 999px;
+      border: 1px solid transparent; display: inline-block;
+    }
+    #koPath .chip.ko {
+      background: color-mix(in srgb, var(--viz-series-2) 20%, transparent);
+      border-color: color-mix(in srgb, var(--viz-series-2) 55%, transparent);
+    }
+    #koPath .chip.th {
+      background: color-mix(in srgb, var(--viz-series-3) 20%, transparent);
+      border-color: color-mix(in srgb, var(--viz-series-3) 55%, transparent);
+    }
+    #koPath .chip.burst {
+      background: color-mix(in srgb, var(--viz-series-4) 20%, transparent);
+      border-color: color-mix(in srgb, var(--viz-series-4) 55%, transparent);
+    }
+    #koPath .arrow { align-self: center; color: var(--muted-foreground); font-size: 16px; }
+    #koPath .legend { margin-top: 8px; display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted-foreground); }
+    #koPath .ctrl { margin-top: 10px; display: flex; align-items: center; gap: 10px; }
+    #koPath .status { flex: 1; font-size: 13px; color: var(--foreground); }
+    #koPath .stepno { color: var(--muted-foreground); font-size: 12px; white-space: nowrap; }
+  </style>
+
+  <h3>一条 KO 指令，从入口走到一级发射</h3>
+
+  <div class="stages" id="koStages">
+    <div class="stage" data-i="0"><div class="sno">①</div><div class="name">业务源</div><div class="sub">OH / APS / ALM / 串口</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-i="1"><div class="sno">②</div><div class="name">KOA 入口缓存</div><div class="sub">按优先级分格存放</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-i="2"><div class="sno">③</div><div class="name">KOA 出口交接台</div><div class="sub">每拍递 1 条：先举手，等对方说“可以”</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-i="3"><div class="sno">④</div><div class="name">THM 建线程</div><div class="sub">排队检查 + 抽模板剧本</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-i="4"><div class="sno">⑤</div><div class="name">一级发射台</div><div class="sub">从举牌的线程里选 2 个</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-i="5"><div class="sno">⑥</div><div class="name">二级排队区（槽池）</div><div class="sub">计算类进等待区 / DMA 任务拆开放</div><div class="tokens"></div></div>
+  </div>
+
+  <div class="legend">
+    <span class="chip ko">指令</span>
+    <span class="chip th">线程</span>
+    <span class="chip burst">burst</span>
+    <span>—— 不同颜色的“物件”代表流动的东西</span>
+  </div>
+
+  <div class="ctrl">
+    <button type="button" class="btn btn-primary" id="koNext">下一步 ▶</button>
+    <div class="status" id="koStatus" role="status" aria-live="polite"></div>
+    <div class="stepno" id="koStepno"></div>
+  </div>
+
+  <script>
+    (function () {
+      var STEPS = [
+        { a: 0, ko: 0, th: -1, burst: -1, s: "业务源按各自的节奏发指令：开销按帧周期、串口随机到达。" },
+        { a: 1, ko: 1, th: -1, burst: -1, s: "指令带着“优先级编号”进场，被放进 KOA 缓存里对应优先级的格子。" },
+        { a: 2, ko: 2, th: -1, burst: -1, s: "出口从最高优先级的格子取一条，举手示意；下游说“可以收”才交接。下游忙就原地等待，不丢。" },
+        { a: 3, ko: 3, th: 3, burst: -1, s: "THM 先查同一来源+同一通道有没有旧线程：没有 → 新建线程，并从模板库随机抽一份“剧本”。" },
+        { a: 3, ko: -1, th: 3, burst: -1, s: "线程按剧本就绪、举牌 READY，牌上的优先级继承自这条指令。" },
+        { a: 4, ko: -1, th: 4, burst: -1, s: "一级发射台扫一遍所有举牌线程，挑优先级最高、编号最靠前的（每拍最多 2 个）。" },
+        { a: 5, ko: -1, th: 5, burst: 5, s: "被选中的线程把当前这条 burst 交出去：计算类进 0/1 号等待区，DMA 类拆成单个任务进任务缓存。" },
+        { a: -1, ko: -1, th: 4, burst: 5, s: "线程进入一拍“冷却”，下拍回来排下一段；burst 在槽池等二级调度拿去执行（EU / DMA）。" }
+      ];
+      var idx = 0;
+      var root = document.getElementById("koPath");
+      var btn = document.getElementById("koNext");
+      var status = document.getElementById("koStatus");
+      var stepno = document.getElementById("koStepno");
+      var stages = root.querySelectorAll(".stage");
+      var tokens = root.querySelectorAll(".stage .tokens");
+
+      function chip(kind, label) {
+        var d = document.createElement("span");
+        d.className = "chip " + kind;
+        d.textContent = label;
+        return d;
+      }
+
+      function render() {
+        var st = STEPS[idx];
+        for (var i = 0; i < stages.length; i++) {
+          stages[i].classList.toggle("active", st.a === i);
+          tokens[i].innerHTML = "";
+        }
+        if (st.ko >= 0) tokens[st.ko].appendChild(chip("ko", "指令"));
+        if (st.th >= 0) tokens[st.th].appendChild(chip("th", "线程"));
+        if (st.burst >= 0) tokens[st.burst].appendChild(chip("burst", "burst"));
+        status.textContent = st.s;
+        stepno.textContent = (idx + 1) + " / " + STEPS.length;
+        btn.textContent = (idx === STEPS.length - 1) ? "从头看 ↺" : "下一步 ▶";
+      }
+
+      btn.addEventListener("click", function () {
+        idx = (idx + 1) % STEPS.length;
+        render();
+      });
+      render();
+    })();
+  </script>
+</div>

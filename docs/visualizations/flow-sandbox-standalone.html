@@ -1,0 +1,1417 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Flow Sandbox</title>
+<style>:root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;height:calc(100vh - 2rem);margin:0 auto;border:0}</style>
+</head>
+<body>
+<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="Flow Sandbox" srcdoc="&lt;!doctype html&gt;
+&lt;html lang=&quot;en&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+&lt;meta name=&quot;referrer&quot; content=&quot;no-referrer&quot;&gt;
+&lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27; &#x27;unsafe-eval&#x27; &#x27;wasm-unsafe-eval&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src &#x27;unsafe-inline&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src &#x27;none&#x27;; object-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;&quot;&gt;
+&lt;title&gt;Flow Sandbox&lt;/title&gt;
+&lt;style&gt;:root {
+  color-scheme: light dark;
+  background-color: var(
+    --background,
+    var(--color-background-primary, light-dark(rgb(255 255 255), rgb(24 24 24)))
+  ) !important;
+
+  /* Agent-facing contract; keep in sync with SKILL.md. */
+  --background: var(
+    --color-background-primary,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --card: color-mix(in oklab, var(--foreground) 5%, var(--background));
+  --card-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --popover: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255), rgb(45 45 45))
+  );
+  --popover-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --primary: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --primary-foreground: var(
+    --color-text-inverse,
+    light-dark(rgb(255 255 255), rgb(13 13 13))
+  );
+  --secondary: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255 / 96%), rgb(54 54 54 / 96%))
+  );
+  --secondary-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --muted: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --muted-foreground: var(
+    --color-text-secondary,
+    light-dark(rgb(26 28 31 / 49.4%), rgb(255 255 255 / 49.8%))
+  );
+  --accent: var(
+    --color-background-info,
+    light-dark(rgb(229 242 255), rgb(13 39 63))
+  );
+  --accent-foreground: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --destructive: var(
+    --color-text-warning,
+    light-dark(rgb(226 85 7), rgb(255 133 73))
+  );
+  --border: var(
+    --color-border-secondary,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+  --input: var(
+    --color-border-primary,
+    light-dark(
+      rgb(26 28 31 / 11.8%),
+      color-mix(in oklab, rgb(0 0 0) 10%, transparent)
+    )
+  );
+  --ring: var(
+    --color-ring-primary,
+    light-dark(rgb(51 156 255), rgb(131 195 255 / 76%))
+  );
+  --font-size-base: var(--font-text-md-size, 14px);
+  --blue: light-dark(rgb(51 156 255), rgb(51 156 255));
+  --orange: light-dark(rgb(226 85 7), rgb(251 106 34));
+  --green: light-dark(rgb(0 162 64), rgb(64 201 119));
+  --red: light-dark(rgb(224 46 42), rgb(255 103 100));
+  --purple: light-dark(rgb(146 79 247), rgb(173 123 249));
+  --yellow: light-dark(rgb(255 195 0), rgb(255 210 64));
+  --viz-series-1: var(--primary);
+  --viz-series-2: light-dark(rgb(243 136 59), rgb(245 154 86));
+  --viz-series-3: light-dark(rgb(93 201 119), rgb(116 213 139));
+  --viz-series-4: light-dark(rgb(235 119 177), rgb(240 143 192));
+  --viz-series-5: light-dark(rgb(155 121 236), rgb(170 145 239));
+  --viz-series-6: light-dark(rgb(58 185 177), rgb(90 203 194));
+
+  /* Internal implementation variables; not part of the agent contract. */
+  --font-sans: -apple-system, system-ui, &quot;Segoe UI&quot;, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, &quot;SF Mono&quot;, Menlo, Consolas, &quot;Liberation Mono&quot;,
+    monospace;
+  --font-size-normal: max(11px, var(--font-size-base));
+  --font-size-tooltip: calc(var(--font-size-base) - 1px);
+  --font-size-small: max(11px, calc(var(--font-size-base) - 2px));
+  --font-size-h1: calc(var(--font-size-normal) * 1.7142857143);
+  --font-size-h2: calc(var(--font-size-normal) * 1.4285714286);
+  --font-size-h3: calc(var(--font-size-normal) * 1.2857142857);
+  --font-weight-normal: 430;
+  --font-weight-medium: 500;
+  --line-height-normal: calc(var(--font-size-normal) * 1.5);
+  --line-height-tooltip: calc(var(--font-size-tooltip) * 1.4285714286);
+  --line-height-small: calc(var(--font-size-small) + 4px);
+  --radius: var(--border-radius-lg, 12.5px);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-2xl: calc(var(--radius) * 1.6);
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px -1px rgb(0 0 0 / 8%);
+  --checkmark-image: url(&quot;data:image/svg+xml,%3Csvg xmlns=&#x27;http://www.w3.org/2000/svg&#x27; viewBox=&#x27;0 0 17 17&#x27;%3E%3Cpath d=&#x27;M12.8961 3.64101C13.1297 3.41418 13.4984 3.37523 13.7779 3.56581C14.0571 3.75635 14.1554 4.11331 14.0299 4.41347L13.9615 4.53847L7.71151 13.7045C7.59411 13.8767 7.4063 13.9877 7.19881 14.0072C6.99136 14.0267 6.78564 13.9533 6.63826 13.806L2.88826 10.056L2.79842 9.9457C2.6192 9.67407 2.64927 9.30496 2.88826 9.06581C3.12738 8.82669 3.49647 8.79676 3.76815 8.97597L3.8785 9.06581L7.03084 12.2182L12.8053 3.74941L12.8961 3.64101Z&#x27;/%3E%3C/svg%3E&quot;);
+
+  /* Legacy aliases; not part of the current agent contract. */
+  --viz-bg: transparent;
+  --viz-panel: var(--card);
+  --viz-border: var(--border);
+  --viz-text: var(--foreground);
+  --viz-muted: var(--muted-foreground);
+  --viz-accent: var(--primary);
+  --viz-accent-text: var(--primary-foreground);
+  --viz-accent-bg: var(--accent);
+  --viz-font-size: var(--font-size-base);
+  --viz-warning: var(--destructive);
+}
+
+:root[data-theme=&quot;light&quot;] {
+  color-scheme: light;
+}
+
+:root[data-theme=&quot;dark&quot;] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html &gt; body {
+  /* Preserve MCP aliases for older inline renderers without creating :root cycles. */
+  --color-background-primary: var(
+    --background,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --color-text-primary: var(
+    --foreground,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --color-border-secondary: var(
+    --border,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+
+  margin: 0;
+  padding: 5px;
+  color: var(--foreground);
+  background: transparent !important;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-normal);
+  font-weight: var(--font-weight-normal);
+  line-height: var(--line-height-normal);
+}
+
+a {
+  color: color-mix(in srgb, var(--viz-accent) 80%, var(--viz-text) 20%);
+  cursor: pointer;
+  font-weight: var(--font-weight-medium, 500);
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+
+a:is(:hover, :focus-visible) {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 0.5px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin-block: 0;
+}
+
+h1 {
+  font-size: var(--font-size-h1);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h2 {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h3,
+h4,
+h5,
+h6 {
+  font-size: var(--font-size-h3);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.3;
+}
+
+b,
+strong,
+th {
+  font-weight: var(--font-weight-medium);
+}
+
+code:not(pre code) {
+  display: inline;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  word-break: break-word;
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+}
+
+.table :is(th, td) {
+  padding-block: 10px;
+  padding-inline: 0 24px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+}
+
+.table-responsive &gt; .table :is(th, td) {
+  overflow-wrap: break-word;
+}
+
+.table :is(th, td):last-child {
+  padding-inline-end: 0;
+}
+
+.table :is(caption, thead th) {
+  font-weight: 600;
+}
+
+.table thead th {
+  padding-block: 8px;
+  border-bottom-color: color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+.table tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+
+.table.table-sm :is(th, td) {
+  padding-block: 6px;
+}
+
+.table.table-sm :is(th, td):not(:last-child) {
+  padding-inline-end: 16px;
+}
+
+.table :is(.text-end, [align=&quot;right&quot;]) {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.table :is(.text-center, [align=&quot;center&quot;]) {
+  text-align: center;
+}
+
+.table .text-nowrap {
+  white-space: nowrap;
+}
+
+#widget {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  background: transparent !important;
+}
+
+.card {
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  border-radius: var(--radius-2xl);
+  corner-shape: superellipse(1.5);
+  color: var(--card-foreground);
+  background: var(--card);
+}
+
+#widget &gt; :not(.card, .progress) {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.tooltip {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  left: 0;
+  width: max-content;
+  max-width: min(
+    20rem,
+    var(--tooltip-available-width, calc(100vw - 10px)),
+    calc(100vw - 10px)
+  );
+  max-height: min(
+    var(--tooltip-available-height, calc(100vh - 10px)),
+    calc(100vh - 10px)
+  );
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--popover-foreground);
+  background: var(--popover);
+  box-shadow: none;
+  font-size: var(--font-size-tooltip);
+  line-height: var(--line-height-tooltip);
+  overflow-wrap: break-word;
+  white-space: normal;
+  pointer-events: none;
+  user-select: none;
+}
+
+.viz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(max(180px, 24%), 1fr));
+  gap: 10px;
+}
+
+.viz-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viz-stat-value {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+.viz-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.progress {
+  display: flex;
+  height: 6px;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+}
+
+.progress-bar {
+  height: 100%;
+  flex-shrink: 0;
+  border: 0;
+  background: var(--viz-series-1);
+}
+
+.viz-badge {
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  color: var(--accent-foreground);
+  background: var(--accent);
+  font-weight: var(--font-weight-medium);
+}
+
+small,
+.text-small,
+.viz-badge {
+  font-size: var(--font-size-small);
+  line-height: var(--line-height-small);
+}
+
+.text-muted {
+  color: var(--muted-foreground);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.viz-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.viz-controls &gt; .form-label {
+  display: grid;
+  min-width: min(100%, 260px);
+  flex: 1 1 280px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: 0;
+}
+
+.viz-controls &gt; .form-label &gt; :is(.form-control, .form-range, .form-select) {
+  grid-column: 1 / -1;
+}
+
+.btn,
+.form-check-input,
+.form-control,
+.form-range,
+.form-select {
+  font: inherit;
+}
+
+.btn {
+  appearance: button;
+  display: inline-flex;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: var(--cursor-interaction, pointer);
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.btn:is(.btn-block, .viz-tile) {
+  inline-size: 100%;
+}
+
+.btn.viz-tile {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+a.btn {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn-primary {
+  border-color: transparent;
+  color: var(--primary-foreground);
+  background: var(--foreground);
+  background-clip: padding-box;
+}
+
+.btn-primary .text-muted {
+  color: color-mix(in srgb, var(--primary-foreground) 50%, transparent);
+}
+
+.btn-primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 80%, transparent);
+  background-clip: padding-box;
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.btn-ghost:not(:disabled):hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+[data-lucide] {
+  stroke-width: 1.6;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--foreground);
+}
+
+.form-control {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--foreground);
+  background: var(--secondary);
+}
+
+.form-control::placeholder {
+  color: var(--muted-foreground);
+}
+
+.form-control[type=&quot;file&quot;] {
+  padding: 0;
+  overflow: hidden;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control[type=&quot;file&quot;]::file-selector-button {
+  min-height: 26px;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--input);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: inherit;
+  font: inherit;
+}
+
+.form-control[type=&quot;file&quot;]:not(:disabled):hover::file-selector-button {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-control-color[type=&quot;color&quot;] {
+  width: 40px;
+  height: 28px;
+  padding: 3px;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 4px);
+  corner-shape: superellipse(1.5);
+}
+
+textarea.form-control {
+  height: auto;
+  min-height: 72px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.form-control:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-control:disabled,
+.form-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.form-select {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  margin: 0;
+  padding: 0 32px 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--foreground);
+  background-color: var(--secondary);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%),
+    linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 10px) 50%;
+  background-repeat: no-repeat;
+  background-size: 4px 4px;
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-select:not(:disabled):hover {
+  background-color: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-select:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-check {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-check-input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--input);
+  color: var(--primary-foreground);
+  background-color: transparent;
+  cursor: var(--cursor-interaction, default);
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;] {
+  border-color: var(--input);
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+  background-color: var(--secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input:not(:disabled):not(:checked):hover {
+  background-color: var(--card);
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;]:checked {
+  border-color: var(--primary);
+  background-color: var(--primary);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;checkbox&quot;]:checked::before {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--primary-foreground);
+  content: &quot;&quot;;
+  mask: var(--checkmark-image) center / 12px 12px no-repeat;
+}
+
+.form-check-input[type=&quot;radio&quot;] {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+}
+
+.form-check-input[type=&quot;radio&quot;]:checked {
+  border: 2px solid var(--primary);
+  background:
+    radial-gradient(circle, var(--primary-foreground) 0 2.5px, transparent 3px),
+    var(--primary);
+}
+
+.form-check:not(.form-switch) .form-check-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+}
+
+.form-switch .form-check-input:disabled,
+.form-switch .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.form-check-label {
+  color: var(--foreground);
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-switch .form-check-input {
+  position: relative;
+  width: 32px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  box-shadow: none;
+  transition: background-color 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid light-dark(var(--primary-foreground), var(--foreground));
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+  box-shadow: var(--shadow-sm);
+  content: &quot;&quot;;
+  transform: translate(2px, -50%);
+  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input:checked {
+  background: var(--primary);
+}
+
+.form-switch .form-check-input:checked::before {
+  transform: translate(14px, -50%);
+}
+
+.form-switch .form-check-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.form-range {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 28px;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  outline: none;
+  border: 0;
+  accent-color: var(--primary);
+  background: linear-gradient(
+      color-mix(in srgb, var(--foreground) 7%, transparent),
+      color-mix(in srgb, var(--foreground) 7%, transparent)
+    )
+    center / 100% 2px no-repeat;
+}
+
+.form-range::-webkit-slider-runnable-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-webkit-slider-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range::-moz-range-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-moz-range-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn:not(.btn-primary, .viz-tile):is(
+  [aria-pressed=&quot;true&quot;],
+  [aria-selected=&quot;true&quot;],
+  .is-selected
+) {
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+
+.btn.viz-tile:is([aria-pressed=&quot;true&quot;], [aria-selected=&quot;true&quot;], .is-selected) {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#widget &gt; svg {
+  width: 100%;
+}
+
+/* Model-authored chart rules can otherwise stretch icons after these styles load. */
+svg.lucide {
+  display: block;
+  width: 16px !important;
+  height: 16px !important;
+  flex: none;
+  margin: 0 !important;
+  stroke-width: 1.6;
+}
+
+.text-warning,
+.text-destructive {
+  color: var(--destructive);
+}
+
+html&gt;body{padding:0}&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div id=&quot;flowSand&quot;&gt;
+  &lt;style&gt;
+    #flowSand { font-family: inherit; }
+    #flowSand h3 { margin: 0 0 10px; }
+    #flowSand .pipe { display: flex; flex-wrap: wrap; gap: 6px; align-items: stretch; }
+    #flowSand .stage {
+      flex: 1 1 128px; min-width: 112px;
+      background: var(--card); color: var(--card-foreground);
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 8px 10px; box-sizing: border-box;
+    }
+    #flowSand .stage.active { outline: 2px solid var(--accent); outline-offset: 1px; }
+    #flowSand .stage.blocked { outline: 2px solid var(--destructive); outline-offset: 1px; }
+    #flowSand .stage .sno { font-size: 12px; color: var(--muted-foreground); font-weight: 500; }
+    #flowSand .stage .name { font-size: 13px; font-weight: 500; margin-top: 2px; }
+    #flowSand .stage .sub { font-size: 11px; color: var(--muted-foreground); margin-top: 2px; }
+    #flowSand .stage .tokens { min-height: 26px; margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap; }
+    #flowSand .chip {
+      font-size: 11px; padding: 2px 8px; border-radius: 999px;
+      border: 1px solid transparent; display: inline-block;
+    }
+    #flowSand .chip.ko { background: color-mix(in srgb, var(--viz-series-2) 20%, transparent); border-color: color-mix(in srgb, var(--viz-series-2) 55%, transparent); }
+    #flowSand .chip.th { background: color-mix(in srgb, var(--viz-series-3) 20%, transparent); border-color: color-mix(in srgb, var(--viz-series-3) 55%, transparent); }
+    #flowSand .chip.burst { background: color-mix(in srgb, var(--viz-series-4) 20%, transparent); border-color: color-mix(in srgb, var(--viz-series-4) 55%, transparent); }
+    #flowSand .chip.drop { background: color-mix(in srgb, var(--destructive) 18%, transparent); border-color: color-mix(in srgb, var(--destructive) 60%, transparent); }
+    #flowSand .arrow { align-self: center; color: var(--muted-foreground); font-size: 16px; }
+    #flowSand .legend { margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted-foreground); }
+    #flowSand .ctrls { margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    #flowSand .status { margin-top: 8px; font-size: 13px; color: var(--foreground); min-height: 18px; }
+    #flowSand .subnote { font-size: 11px; color: var(--muted-foreground); }
+    #flowSand .bufgrid { margin-top: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); color: var(--card-foreground); padding: 10px 12px; }
+    #flowSand .bufgrid h4 { margin: 0 0 8px; font-size: 13px; }
+    #flowSand .bufrow { display: flex; flex-wrap: wrap; gap: 10px; }
+    #flowSand .bufbox { border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; min-width: 148px; flex: 1 1 148px; }
+    #flowSand .bufbox.full { border-color: color-mix(in srgb, var(--destructive) 65%, transparent); }
+    #flowSand .bhead { font-size: 12px; display: flex; justify-content: space-between; }
+    #flowSand .bcap { color: var(--muted-foreground); }
+    #flowSand .cells { display: flex; gap: 2px; margin: 6px 0; }
+    #flowSand .cell { width: 8px; height: 13px; border-radius: 2px; background: color-mix(in srgb, var(--border) 70%, transparent); }
+    #flowSand .cell.on { background: color-mix(in srgb, var(--viz-series-1) 70%, transparent); }
+    #flowSand .cell.full { background: color-mix(in srgb, var(--destructive) 70%, transparent); }
+    #flowSand .bacts { display: flex; gap: 4px; flex-wrap: wrap; }
+    #flowSand .rba { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-top: 6px; }
+    #flowSand .rba .bar { width: 70px; height: 9px; border-radius: 5px; background: color-mix(in srgb, var(--border) 70%, transparent); position: relative; overflow: hidden; }
+    #flowSand .rba .bar i { position: absolute; left: 0; top: 0; bottom: 0; background: color-mix(in srgb, var(--viz-series-1) 70%, transparent); }
+    #flowSand .rba.low .bar i { background: color-mix(in srgb, var(--destructive) 70%, transparent); }
+    #flowSand .rba .val { min-width: 30px; }
+  &lt;/style&gt;
+
+  &lt;h3&gt;反压 · 丢弃 · 二级缓存 —— 调试沙盘&lt;/h3&gt;
+
+  &lt;div class=&quot;pipe&quot; id=&quot;fsPipe&quot;&gt;
+    &lt;div class=&quot;stage&quot; data-i=&quot;0&quot;&gt;&lt;div class=&quot;sno&quot;&gt;①&lt;/div&gt;&lt;div class=&quot;name&quot;&gt;业务源&lt;/div&gt;&lt;div class=&quot;sub&quot;&gt;OH / APS / ALM / 串口&lt;/div&gt;&lt;div class=&quot;tokens&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+    &lt;div class=&quot;arrow&quot;&gt;→&lt;/div&gt;
+    &lt;div class=&quot;stage&quot; data-i=&quot;1&quot;&gt;&lt;div class=&quot;sno&quot;&gt;②&lt;/div&gt;&lt;div class=&quot;name&quot;&gt;KOA 入口缓存&lt;/div&gt;&lt;div class=&quot;sub&quot;&gt;满了会丢弃&lt;/div&gt;&lt;div class=&quot;tokens&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+    &lt;div class=&quot;arrow&quot;&gt;→&lt;/div&gt;
+    &lt;div class=&quot;stage&quot; data-i=&quot;2&quot;&gt;&lt;div class=&quot;sno&quot;&gt;③&lt;/div&gt;&lt;div class=&quot;name&quot;&gt;KOA 出口交接台&lt;/div&gt;&lt;div class=&quot;sub&quot;&gt;举手 + 同意才交接&lt;/div&gt;&lt;div class=&quot;tokens&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+    &lt;div class=&quot;arrow&quot;&gt;→&lt;/div&gt;
+    &lt;div class=&quot;stage&quot; data-i=&quot;3&quot;&gt;&lt;div class=&quot;sno&quot;&gt;④&lt;/div&gt;&lt;div class=&quot;name&quot;&gt;THM 保序 + 线程&lt;/div&gt;&lt;div class=&quot;sub&quot;&gt;排队检查 + 模板剧本&lt;/div&gt;&lt;div class=&quot;tokens&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+    &lt;div class=&quot;arrow&quot;&gt;→&lt;/div&gt;
+    &lt;div class=&quot;stage&quot; data-i=&quot;4&quot;&gt;&lt;div class=&quot;sno&quot;&gt;⑤&lt;/div&gt;&lt;div class=&quot;name&quot;&gt;一级发射台&lt;/div&gt;&lt;div class=&quot;sub&quot;&gt;i/v → q0/q1；c → ct&lt;/div&gt;&lt;div class=&quot;tokens&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+    &lt;div class=&quot;arrow&quot;&gt;→&lt;/div&gt;
+    &lt;div class=&quot;stage&quot; data-i=&quot;5&quot;&gt;&lt;div class=&quot;sno&quot;&gt;⑥&lt;/div&gt;&lt;div class=&quot;name&quot;&gt;二级调度（4×DSE）&lt;/div&gt;&lt;div class=&quot;sub&quot;&gt;发射即完成 → FIFO&lt;/div&gt;&lt;div class=&quot;tokens&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+    &lt;div class=&quot;arrow&quot;&gt;→&lt;/div&gt;
+    &lt;div class=&quot;stage&quot; data-i=&quot;6&quot;&gt;&lt;div class=&quot;sno&quot;&gt;⑦&lt;/div&gt;&lt;div class=&quot;name&quot;&gt;dma_ctrl / RBA&lt;/div&gt;&lt;div class=&quot;sub&quot;&gt;FIFO 出队 + 读写机会&lt;/div&gt;&lt;div class=&quot;tokens&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+  &lt;/div&gt;
+
+  &lt;div class=&quot;legend&quot;&gt;
+    &lt;span class=&quot;chip ko&quot;&gt;指令&lt;/span&gt;
+    &lt;span class=&quot;chip th&quot;&gt;线程&lt;/span&gt;
+    &lt;span class=&quot;chip burst&quot;&gt;burst&lt;/span&gt;
+    &lt;span class=&quot;chip drop&quot;&gt;✕ 丢弃&lt;/span&gt;
+    &lt;span&gt;红框 = 堵住（反压）；红格 = 满&lt;/span&gt;
+  &lt;/div&gt;
+
+  &lt;div class=&quot;ctrls&quot;&gt;
+    &lt;button type=&quot;button&quot; class=&quot;btn&quot; id=&quot;fsPrev&quot;&gt;◀ 上一步&lt;/button&gt;
+    &lt;button type=&quot;button&quot; class=&quot;btn btn-primary&quot; id=&quot;fsStep&quot;&gt;推进一拍 ▶&lt;/button&gt;
+    &lt;button type=&quot;button&quot; class=&quot;btn&quot; id=&quot;fsSpawn&quot;&gt;业务源发一条指令&lt;/button&gt;
+    &lt;button type=&quot;button&quot; class=&quot;btn&quot; id=&quot;fsDrop&quot;&gt;模拟 KOA 段满丢弃&lt;/button&gt;
+    &lt;button type=&quot;button&quot; class=&quot;btn&quot; id=&quot;fsReset&quot;&gt;重置 ↺&lt;/button&gt;
+    &lt;label class=&quot;form-check&quot;&gt;&lt;input type=&quot;checkbox&quot; class=&quot;form-check-input&quot; id=&quot;fsBusy&quot;&gt;&lt;span class=&quot;form-check-label&quot;&gt;THM 忙（反压 KOA 出口）&lt;/span&gt;&lt;/label&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;status&quot; id=&quot;fsStatus&quot; role=&quot;status&quot; aria-live=&quot;polite&quot;&gt;&lt;/div&gt;
+
+  &lt;div class=&quot;bufgrid&quot;&gt;
+    &lt;h4&gt;二级调度缓冲区（＋ = 手动加积压，－ = 调走；DSE 块内&quot;发射&quot;从任务池取任务进 FIFO）&lt;/h4&gt;
+    &lt;div class=&quot;bufrow&quot;&gt;
+      &lt;div class=&quot;bufbox&quot; data-b=&quot;q0&quot;&gt;&lt;div class=&quot;bhead&quot;&gt;&lt;span&gt;q0 槽池&lt;/span&gt;&lt;span class=&quot;bcap&quot; id=&quot;cap-q0&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;cells&quot;&gt;&lt;/div&gt;&lt;div class=&quot;bacts&quot;&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;plus&quot;&gt;＋积压&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;minus&quot;&gt;－调走&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;
+      &lt;div class=&quot;bufbox&quot; data-b=&quot;q1&quot;&gt;&lt;div class=&quot;bhead&quot;&gt;&lt;span&gt;q1 槽池&lt;/span&gt;&lt;span class=&quot;bcap&quot; id=&quot;cap-q1&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;cells&quot;&gt;&lt;/div&gt;&lt;div class=&quot;bacts&quot;&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;plus&quot;&gt;＋积压&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;minus&quot;&gt;－调走&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;
+      &lt;div class=&quot;bufbox&quot; data-b=&quot;ct&quot;&gt;&lt;div class=&quot;bhead&quot;&gt;&lt;span&gt;ct 任务池&lt;/span&gt;&lt;span class=&quot;bcap&quot; id=&quot;cap-ct&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;cells&quot;&gt;&lt;/div&gt;&lt;div class=&quot;bacts&quot;&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;plus&quot;&gt;＋积压&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;minus&quot;&gt;－调走&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;
+    &lt;/div&gt;
+    &lt;div class=&quot;bufrow&quot; style=&quot;margin-top:10px&quot;&gt;
+      &lt;div class=&quot;bufbox&quot; data-b=&quot;f0&quot; data-dse=&quot;0&quot;&gt;&lt;div class=&quot;bhead&quot;&gt;&lt;span&gt;DSE0 FIFO&lt;/span&gt;&lt;span class=&quot;bcap&quot; id=&quot;cap-f0&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;cells&quot;&gt;&lt;/div&gt;&lt;div class=&quot;rba&quot;&gt;&lt;span class=&quot;bar&quot;&gt;&lt;i&gt;&lt;/i&gt;&lt;/span&gt;&lt;span class=&quot;val&quot; id=&quot;rba-f0&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;bacts&quot;&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;plus&quot;&gt;＋积压&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;minus&quot;&gt;－调走&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;emit&quot;&gt;发射(任务→FIFO)&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;deq&quot;&gt;出队(耗信用)&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;refund&quot;&gt;＋归还信用&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;
+      &lt;div class=&quot;bufbox&quot; data-b=&quot;f1&quot; data-dse=&quot;1&quot;&gt;&lt;div class=&quot;bhead&quot;&gt;&lt;span&gt;DSE1 FIFO&lt;/span&gt;&lt;span class=&quot;bcap&quot; id=&quot;cap-f1&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;cells&quot;&gt;&lt;/div&gt;&lt;div class=&quot;rba&quot;&gt;&lt;span class=&quot;bar&quot;&gt;&lt;i&gt;&lt;/i&gt;&lt;/span&gt;&lt;span class=&quot;val&quot; id=&quot;rba-f1&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;bacts&quot;&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;plus&quot;&gt;＋积压&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;minus&quot;&gt;－调走&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;emit&quot;&gt;发射&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;deq&quot;&gt;出队&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;refund&quot;&gt;＋归还&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;
+      &lt;div class=&quot;bufbox&quot; data-b=&quot;f2&quot; data-dse=&quot;2&quot;&gt;&lt;div class=&quot;bhead&quot;&gt;&lt;span&gt;DSE2 FIFO&lt;/span&gt;&lt;span class=&quot;bcap&quot; id=&quot;cap-f2&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;cells&quot;&gt;&lt;/div&gt;&lt;div class=&quot;rba&quot;&gt;&lt;span class=&quot;bar&quot;&gt;&lt;i&gt;&lt;/i&gt;&lt;/span&gt;&lt;span class=&quot;val&quot; id=&quot;rba-f2&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;bacts&quot;&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;plus&quot;&gt;＋积压&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;minus&quot;&gt;－调走&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;emit&quot;&gt;发射&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;deq&quot;&gt;出队&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;refund&quot;&gt;＋归还&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;
+      &lt;div class=&quot;bufbox&quot; data-b=&quot;f3&quot; data-dse=&quot;3&quot;&gt;&lt;div class=&quot;bhead&quot;&gt;&lt;span&gt;DSE3 FIFO&lt;/span&gt;&lt;span class=&quot;bcap&quot; id=&quot;cap-f3&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;cells&quot;&gt;&lt;/div&gt;&lt;div class=&quot;rba&quot;&gt;&lt;span class=&quot;bar&quot;&gt;&lt;i&gt;&lt;/i&gt;&lt;/span&gt;&lt;span class=&quot;val&quot; id=&quot;rba-f3&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;bacts&quot;&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;plus&quot;&gt;＋积压&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;minus&quot;&gt;－调走&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;emit&quot;&gt;发射&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;deq&quot;&gt;出队&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;btn&quot; data-act=&quot;refund&quot;&gt;＋归还&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;
+    &lt;/div&gt;
+    &lt;div class=&quot;subnote&quot;&gt;简化说明：ct 是共享任务池，任意 DSE 都可以从中&quot;发射&quot;（真实设计按 tag 匹配 DSE）；每出队 1 个任务消耗 1 个 RBA 信用点，信用点需手动归还，归还不及时就会连锁堵住。&lt;/div&gt;
+  &lt;/div&gt;
+
+  &lt;script&gt;
+    (function () {
+      var CAP = { q0: 8, q1: 8, ct: 16, f0: 8, f1: 8, f2: 8, f3: 8 };
+      function init() {
+        return {
+          ko: -1, thCreated: false, thReady: false, thCool: 0, ivNext: true,
+          q0: 0, q1: 0, ct: 0, f0: 0, f1: 0, f2: 0, f3: 0,
+          r0: 64, r1: 64, r2: 64, r3: 64,
+          thmBusy: false, dropShow: false, log: &quot;欢迎：先点「业务源发一条指令」，再「推进一拍」&quot;
+        };
+      }
+      var state = init();
+      var history = [];
+      var root = document.getElementById(&quot;flowSand&quot;);
+      var stages = root.querySelectorAll(&quot;.stage&quot;);
+      var tokens = root.querySelectorAll(&quot;.stage .tokens&quot;);
+      var status = document.getElementById(&quot;fsStatus&quot;);
+      var busyBox = document.getElementById(&quot;fsBusy&quot;);
+
+      function snap() { history.push(JSON.parse(JSON.stringify(state))); if (history.length &gt; 200) history.shift(); }
+      function undo() { if (!history.length) return false; state = history.pop(); return true; }
+      function chip(kind, label) { var d = document.createElement(&quot;span&quot;); d.className = &quot;chip &quot; + kind; d.textContent = label; return d; }
+
+      function blockedStages() {
+        var b = {};
+        if (state.ko === 2 &amp;&amp; state.thmBusy) b[2] = 1;
+        if (state.thCreated &amp;&amp; state.thReady &amp;&amp; state.thCool === 0) {
+          if (state.ivNext &amp;&amp; state.q0 &gt;= CAP.q0 &amp;&amp; state.q1 &gt;= CAP.q1) b[4] = 1;
+          if (!state.ivNext &amp;&amp; state.ct &gt;= CAP.ct) b[4] = 1;
+        }
+        if (state.f0 &gt;= CAP.f0 || state.f1 &gt;= CAP.f1 || state.f2 &gt;= CAP.f2 || state.f3 &gt;= CAP.f3) b[5] = 1;
+        if ((state.f0 &gt; 0 &amp;&amp; state.r0 === 0) || (state.f1 &gt; 0 &amp;&amp; state.r1 === 0) ||
+            (state.f2 &gt; 0 &amp;&amp; state.r2 === 0) || (state.f3 &gt; 0 &amp;&amp; state.r3 === 0)) b[6] = 1;
+        return b;
+      }
+
+      function render() {
+        var blk = blockedStages();
+        for (var i = 0; i &lt; stages.length; i++) {
+          stages[i].classList.toggle(&quot;blocked&quot;, !!blk[i]);
+          tokens[i].innerHTML = &quot;&quot;;
+        }
+        if (state.ko &gt;= 0) tokens[state.ko].appendChild(chip(&quot;ko&quot;, &quot;指令&quot;));
+        if (state.thCreated) tokens[state.thReady ? 4 : 3].appendChild(chip(&quot;th&quot;, &quot;线程&quot;));
+        if (state.dropShow) tokens[1].appendChild(chip(&quot;drop&quot;, &quot;✕ 丢弃&quot;));
+        var th = (state.thCreated ? (state.thReady ? &quot;就绪举牌&quot; : state.thCool &gt; 0 ? &quot;冷却&quot; + state.thCool + &quot;拍&quot; : &quot;已建&quot;) : &quot;未建&quot;);
+        var ivlbl = state.ivNext ? &quot;下次发 i/v&quot; : &quot;下次发 c&quot;;
+        status.textContent = state.log + &quot;　|　线程:&quot; + th + &quot;　&quot; + ivlbl;
+        for (var b in CAP) {
+          var box = root.querySelector(&#x27;[data-b=&quot;&#x27; + b + &#x27;&quot;]&#x27;);
+          var capEl = document.getElementById(&quot;cap-&quot; + b);
+          capEl.textContent = state[b] + &quot;/&quot; + CAP[b];
+          box.classList.toggle(&quot;full&quot;, state[b] &gt;= CAP[b]);
+          var cells = box.querySelector(&quot;.cells&quot;);
+          cells.innerHTML = &quot;&quot;;
+          for (var k = 0; k &lt; CAP[b]; k++) {
+            var c = document.createElement(&quot;span&quot;);
+            c.className = &quot;cell&quot; + (k &lt; state[b] ? &quot; on&quot; : &quot;&quot;);
+            if (state[b] &gt;= CAP[b]) c.className += &quot; full&quot;;
+            cells.appendChild(c);
+          }
+        }
+        for (var d = 0; d &lt; 4; d++) {
+          var r = state[&quot;r&quot; + d];
+          var box = root.querySelector(&#x27;[data-b=&quot;f&#x27; + d + &#x27;&quot;]&#x27;);
+          var bar = box.querySelector(&quot;.rba&quot;);
+          bar.classList.toggle(&quot;low&quot;, r &lt;= 16);
+          bar.querySelector(&quot;i&quot;).style.width = (100 * r / 64) + &quot;%&quot;;
+          document.getElementById(&quot;rba-f&quot; + d).textContent = r;
+        }
+        busyBox.checked = state.thmBusy;
+        document.getElementById(&quot;fsPrev&quot;).disabled = history.length === 0;
+      }
+
+      function doStep() {
+        snap();
+        if (state.dropShow) state.dropShow = false;
+        if (state.ko === 0) { state.ko = 1; state.log = &quot;指令进 KOA 入口缓存，按优先级入格&quot;; render(); return; }
+        if (state.ko === 1) { state.ko = 2; state.log = &quot;KOA 出口从最高优先级格取一条，举手等下游同意&quot;; render(); return; }
+        if (state.ko === 2) {
+          if (state.thmBusy) { state.log = &quot;THM 忙 → 出口保持等待（不丢）&quot;; render(); return; }
+          state.ko = 3; state.log = &quot;下游同意，指令交接给 THM&quot;; render(); return;
+        }
+        if (state.ko === 3 &amp;&amp; !state.thCreated) {
+          state.thCreated = true; state.thReady = true; state.ko = -1;
+          state.log = &quot;THM 建线程：从模板库抽一份剧本，线程就绪举牌&quot;; render(); return;
+        }
+        if (state.thCreated &amp;&amp; state.thReady &amp;&amp; state.thCool === 0) {
+          if (state.ivNext) {
+            if (state.q0 &lt; CAP.q0) { state.q0++; state.thReady = false; state.thCool = 1; state.ivNext = false; state.log = &quot;发射 i/v burst → q0&quot;; }
+            else if (state.q1 &lt; CAP.q1) { state.q1++; state.thReady = false; state.thCool = 1; state.ivNext = false; state.log = &quot;q0 满，i/v burst → q1&quot;; }
+            else state.log = &quot;q0/q1 都满：i/v 发射被压，线程保持举牌&quot;;
+          } else {
+            if (state.ct &lt; CAP.ct) { state.ct++; state.thReady = false; state.thCool = 1; state.ivNext = true; state.log = &quot;发射 c_task burst → 拆成任务进 ct&quot;; }
+            else state.log = &quot;ct 满：c_task 发射被压，线程保持举牌&quot;;
+          }
+          render(); return;
+        }
+        if (state.thCreated &amp;&amp; state.thCool &gt; 0) {
+          state.thCool--;
+          if (state.thCool === 0) { state.thReady = true; state.log = &quot;线程冷却结束，回举牌区&quot;; }
+          else state.log = &quot;线程冷却中…&quot;;
+          render(); return;
+        }
+        var moved = false;
+        for (var d = 0; d &lt; 4; d++) {
+          if (state.ct &gt; 0 &amp;&amp; state[&quot;f&quot; + d] &lt; CAP[&quot;f&quot; + d]) { state.ct--; state[&quot;f&quot; + d]++; moved = true; }
+          if (state[&quot;f&quot; + d] &gt; 0 &amp;&amp; state[&quot;r&quot; + d] &gt; 0) { state[&quot;f&quot; + d]--; state[&quot;r&quot; + d]--; moved = true; }
+        }
+        state.log = moved ? &quot;二级：DSE 发射任务进 FIFO / FIFO 出队消耗信用&quot; : &quot;空闲：没有可动的东西，先「业务源发一条指令」&quot;;
+        render();
+      }
+
+      function bump(b, delta, label) {
+        snap();
+        var n = state[b] + delta;
+        if (n &lt; 0) n = 0;
+        if (n &gt; CAP[b]) n = CAP[b];
+        state[b] = n;
+        state.log = label + (delta &gt; 0 ? &quot;＋1&quot; : &quot;－1&quot;) + &quot; → &quot; + n + &quot;/&quot; + CAP[b];
+        render();
+      }
+
+      document.getElementById(&quot;fsPrev&quot;).addEventListener(&quot;click&quot;, function () { if (undo()) { state.log = &quot;已回退一步&quot;; render(); } });
+      document.getElementById(&quot;fsStep&quot;).addEventListener(&quot;click&quot;, doStep);
+      document.getElementById(&quot;fsSpawn&quot;).addEventListener(&quot;click&quot;, function () {
+        snap();
+        if (state.ko === -1) { state.ko = 0; state.log = &quot;业务源发出一条指令（带优先级）&quot;; }
+        else state.log = &quot;已有一条指令在路上，先等它走完&quot;;
+        render();
+      });
+      document.getElementById(&quot;fsDrop&quot;).addEventListener(&quot;click&quot;, function () {
+        snap();
+        if (state.ko === 1) { state.ko = -1; state.dropShow = true; state.log = &quot;模拟：该优先级格已满 → 清空丢弃 + 告警（唯一丢报文的地方）&quot;; }
+        else state.log = &quot;指令不在 KOA 入口（位置 &quot; + state.ko + &quot;），无法演示丢弃&quot;;
+        render();
+      });
+      document.getElementById(&quot;fsReset&quot;).addEventListener(&quot;click&quot;, function () { snap(); state = init(); render(); });
+      busyBox.addEventListener(&quot;change&quot;, function () { snap(); state.thmBusy = busyBox.checked; state.log = busyBox.checked ? &quot;THM 忙：ko_rdy=0，KOA 出口原地等待（不丢）&quot; : &quot;THM 空闲：交接恢复&quot;; render(); });
+
+      root.querySelectorAll(&quot;[data-act]&quot;).forEach(function (btn) {
+        btn.addEventListener(&quot;click&quot;, function () {
+          var act = btn.getAttribute(&quot;data-act&quot;);
+          var box = btn.closest(&quot;[data-b]&quot;);
+          var b = box.getAttribute(&quot;data-b&quot;);
+          var d = box.getAttribute(&quot;data-dse&quot;);
+          if (act === &quot;plus&quot; || act === &quot;minus&quot;) { bump(b, act === &quot;plus&quot; ? 1 : -1, b); return; }
+          snap();
+          if (act === &quot;emit&quot;) {
+            if (state.ct &gt; 0 &amp;&amp; state[&quot;f&quot; + d] &lt; CAP[&quot;f&quot; + d]) { state.ct--; state[&quot;f&quot; + d]++; state.log = &quot;DSE&quot; + d + &quot; 发射：任务从 ct → FIFO（发射即完成）&quot;; }
+            else state.log = &quot;DSE&quot; + d + &quot; 无法发射：&quot; + (state.ct === 0 ? &quot;ct 没任务&quot; : &quot;FIFO 满&quot;);
+          } else if (act === &quot;deq&quot;) {
+            if (state[&quot;f&quot; + d] &gt; 0 &amp;&amp; state[&quot;r&quot; + d] &gt; 0) { state[&quot;f&quot; + d]--; state[&quot;r&quot; + d]--; state.log = &quot;DSE&quot; + d + &quot; 出队 1 个任务，信用 &quot; + state[&quot;r&quot; + d] + &quot;/64&quot;; }
+            else state.log = &quot;DSE&quot; + d + &quot; 无法出队：&quot; + (state[&quot;f&quot; + d] === 0 ? &quot;FIFO 空&quot; : &quot;信用为 0（先＋归还信用）&quot;);
+          } else if (act === &quot;refund&quot;) {
+            if (state[&quot;r&quot; + d] &lt; 64) { state[&quot;r&quot; + d]++; state.log = &quot;DSE&quot; + d + &quot; 归还 1 信用 → &quot; + state[&quot;r&quot; + d] + &quot;/64&quot;; }
+            else state.log = &quot;信用已满 64&quot;;
+          }
+          render();
+        });
+      });
+      render();
+    })();
+  &lt;/script&gt;
+&lt;/div&gt;
+
+&lt;script src=&quot;https://unpkg.com/@floating-ui/core@1.7.3/dist/floating-ui.core.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script src=&quot;https://unpkg.com/@floating-ui/dom@1.7.4/dist/floating-ui.dom.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  if (window.FloatingUIDOM == null) {
+    return;
+  }
+  const { autoUpdate, computePosition, flip, offset, shift, size } =
+    window.FloatingUIDOM;
+  const tooltipPlacements = new Set([&quot;top&quot;, &quot;right&quot;, &quot;bottom&quot;, &quot;left&quot;]);
+  const tooltipId = `codex-visualization-tooltip-${
+    window.crypto?.randomUUID?.() ?? Date.now().toString(36)
+  }`;
+  const tooltipGap = 5;
+  const hoverDelay = 700;
+  const skipDelay = 300;
+  let activeTrigger = null;
+  let pendingTrigger = null;
+  let tooltip = null;
+  let openTimeout = null;
+  let autoUpdateCleanup = null;
+  let positionRequest = 0;
+  let skipDelayUntil = 0;
+
+  const getTrigger = (target) =&gt;
+    target?.nodeType === Node.ELEMENT_NODE
+      ? target.closest(&quot;[data-tooltip]&quot;)
+      : null;
+  const containsTarget = (trigger, target) =&gt;
+    target?.nodeType != null &amp;&amp; trigger.contains(target);
+  const getContent = (trigger) =&gt;
+    trigger.getAttribute(&quot;data-tooltip&quot;)?.trim() ?? &quot;&quot;;
+  const getPlacement = (trigger) =&gt; {
+    const placement = trigger.getAttribute(&quot;data-tooltip-placement&quot;);
+    return tooltipPlacements.has(placement) ? placement : &quot;top&quot;;
+  };
+  const getTooltip = () =&gt; {
+    if (tooltip == null) {
+      tooltip = document.createElement(&quot;div&quot;);
+      tooltip.id = tooltipId;
+      tooltip.className = &quot;tooltip&quot;;
+      tooltip.setAttribute(&quot;role&quot;, &quot;tooltip&quot;);
+    }
+    return tooltip;
+  };
+  const setDescribedBy = (trigger, described) =&gt; {
+    const ids = new Set(
+      (trigger.getAttribute(&quot;aria-describedby&quot;) ?? &quot;&quot;)
+        .split(/\s+/)
+        .filter(Boolean),
+    );
+    if (described) {
+      ids.add(tooltipId);
+    } else {
+      ids.delete(tooltipId);
+    }
+    if (ids.size === 0) {
+      trigger.removeAttribute(&quot;aria-describedby&quot;);
+    } else {
+      trigger.setAttribute(&quot;aria-describedby&quot;, [...ids].join(&quot; &quot;));
+    }
+  };
+  const clearOpenTimeout = () =&gt; {
+    if (openTimeout != null) {
+      window.clearTimeout(openTimeout);
+      openTimeout = null;
+    }
+    pendingTrigger = null;
+  };
+  const closeTooltip = (activateSkipDelay = true) =&gt; {
+    clearOpenTimeout();
+    positionRequest += 1;
+    autoUpdateCleanup?.();
+    autoUpdateCleanup = null;
+    if (activeTrigger == null) {
+      return;
+    }
+    setDescribedBy(activeTrigger, false);
+    activeTrigger = null;
+    tooltip?.remove();
+    if (activateSkipDelay) {
+      skipDelayUntil = Date.now() + skipDelay;
+    }
+  };
+  const updatePosition = (trigger, floating) =&gt; {
+    const request = ++positionRequest;
+    void computePosition(trigger, floating, {
+      middleware: [
+        offset(tooltipGap),
+        flip({ padding: tooltipGap }),
+        shift({ padding: tooltipGap }),
+        size({
+          padding: tooltipGap,
+          apply({ availableHeight, availableWidth, elements }) {
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-width&quot;,
+              `${Math.max(0, availableWidth)}px`,
+            );
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-height&quot;,
+              `${Math.max(0, availableHeight)}px`,
+            );
+          },
+        }),
+      ],
+      placement: getPlacement(trigger),
+      strategy: &quot;fixed&quot;,
+    })
+      .then(({ x, y }) =&gt; {
+        if (activeTrigger !== trigger || request !== positionRequest) {
+          return;
+        }
+        const scale = window.devicePixelRatio || 1;
+        floating.style.transform = `translate(${Math.round(x * scale) / scale}px, ${Math.round(y * scale) / scale}px)`;
+        floating.style.visibility = &quot;visible&quot;;
+      })
+      .catch(() =&gt; {
+        if (activeTrigger === trigger &amp;&amp; request === positionRequest) {
+          closeTooltip(false);
+        }
+      });
+  };
+  const openTooltip = (trigger) =&gt; {
+    const content = getContent(trigger);
+    if (!trigger.isConnected || content.length === 0) {
+      return;
+    }
+    clearOpenTimeout();
+    if (activeTrigger === trigger) {
+      return;
+    }
+    closeTooltip();
+    const floating = getTooltip();
+    floating.textContent = content;
+    floating.style.visibility = &quot;hidden&quot;;
+    floating.style.transform = &quot;translate(0, 0)&quot;;
+    document.body.appendChild(floating);
+    activeTrigger = trigger;
+    setDescribedBy(trigger, true);
+    autoUpdateCleanup = autoUpdate(trigger, floating, () =&gt; {
+      updatePosition(trigger, floating);
+    });
+  };
+  const requestOpen = (trigger, immediate = false) =&gt; {
+    if (
+      getContent(trigger).length === 0 ||
+      activeTrigger === trigger ||
+      pendingTrigger === trigger
+    ) {
+      return;
+    }
+    clearOpenTimeout();
+    pendingTrigger = trigger;
+    const delay =
+      immediate || activeTrigger != null || Date.now() &lt; skipDelayUntil
+        ? 0
+        : hoverDelay;
+    if (delay === 0) {
+      openTooltip(trigger);
+      return;
+    }
+    openTimeout = window.setTimeout(() =&gt; {
+      openTimeout = null;
+      pendingTrigger = null;
+      openTooltip(trigger);
+    }, delay);
+  };
+  const handlePointerOpen = (event) =&gt; {
+    if (event.pointerType === &quot;touch&quot;) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    requestOpen(trigger);
+  };
+  const handleLeave = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handleFocusIn = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger?.matches(&quot;:focus-visible&quot;)) {
+      requestOpen(trigger, true);
+    }
+  };
+  const handleKeyDown = (event) =&gt; {
+    if (event.key === &quot;Escape&quot;) {
+      closeTooltip();
+    }
+  };
+  const handleContextMenu = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const destroy = () =&gt; {
+    closeTooltip(false);
+    document.removeEventListener(&quot;pointerover&quot;, handlePointerOpen);
+    document.removeEventListener(&quot;pointerout&quot;, handleLeave);
+    document.removeEventListener(&quot;focusin&quot;, handleFocusIn);
+    document.removeEventListener(&quot;focusout&quot;, handleLeave);
+    document.removeEventListener(&quot;keydown&quot;, handleKeyDown);
+    document.removeEventListener(&quot;contextmenu&quot;, handleContextMenu);
+    tooltip = null;
+  };
+
+  document.addEventListener(&quot;pointerover&quot;, handlePointerOpen);
+  document.addEventListener(&quot;pointerout&quot;, handleLeave);
+  document.addEventListener(&quot;focusin&quot;, handleFocusIn);
+  document.addEventListener(&quot;focusout&quot;, handleLeave);
+  document.addEventListener(&quot;keydown&quot;, handleKeyDown);
+  document.addEventListener(&quot;contextmenu&quot;, handleContextMenu);
+  window.addEventListener(&quot;pagehide&quot;, destroy, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-lucide&quot; async src=&quot;https://unpkg.com/lucide@1.17.0/dist/umd/lucide.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  const initialize = () =&gt; {
+    globalThis.lucide?.createIcons({ attrs: { width: 16, height: 16 } });
+  };
+  if (globalThis.lucide != null) {
+    initialize();
+    return;
+  }
+  document
+    .getElementById(&quot;codex-visualization-lucide&quot;)
+    ?.addEventListener(&quot;load&quot;, initialize, { once: true });
+})();
+&lt;/script&gt;
+
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+</body>
+</html>

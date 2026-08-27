@@ -1,0 +1,467 @@
+<div id="flowConc">
+  <style>
+    #flowConc { font-family: inherit; }
+    #flowConc h3 { margin: 0 0 8px; }
+    #flowConc .ctrls { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+    #flowConc .ctl { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+    #flowConc .ctl input[type=range] { width: 130px; }
+    #flowConc .ctl .v { color: var(--muted-foreground); min-width: 26px; }
+    #flowConc .stats { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; font-size: 12px; color: var(--muted-foreground); }
+    #flowConc .stats b { color: var(--foreground); font-weight: 500; }
+    #flowConc .pipe { display: flex; flex-wrap: wrap; gap: 6px; align-items: stretch; }
+    #flowConc .stage {
+      flex: 1 1 122px; min-width: 108px;
+      background: var(--card); color: var(--card-foreground);
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 8px 10px; box-sizing: border-box;
+    }
+    #flowConc .stage.blocked { outline: 2px solid var(--destructive); outline-offset: 1px; }
+    #flowConc .stage .name { font-size: 13px; font-weight: 500; }
+    #flowConc .stage .sub { font-size: 11px; color: var(--muted-foreground); margin-top: 2px; }
+    #flowConc .stage .tokens { min-height: 26px; margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap; }
+    #flowConc .chip {
+      font-size: 11px; padding: 2px 8px; border-radius: 999px;
+      border: 1px solid transparent; display: inline-block;
+    }
+    #flowConc .chip.ko { background: color-mix(in srgb, var(--viz-series-2) 20%, transparent); border-color: color-mix(in srgb, var(--viz-series-2) 55%, transparent); }
+    #flowConc .chip.th { background: color-mix(in srgb, var(--viz-series-3) 20%, transparent); border-color: color-mix(in srgb, var(--viz-series-3) 55%, transparent); }
+    #flowConc .chip.iv { background: color-mix(in srgb, var(--viz-series-4) 20%, transparent); border-color: color-mix(in srgb, var(--viz-series-4) 55%, transparent); }
+    #flowConc .chip.c { background: color-mix(in srgb, var(--viz-series-5) 20%, transparent); border-color: color-mix(in srgb, var(--viz-series-5) 55%, transparent); }
+    #flowConc .chip.task { background: color-mix(in srgb, var(--viz-series-6) 20%, transparent); border-color: color-mix(in srgb, var(--viz-series-6) 55%, transparent); }
+    #flowConc .chip.drop { background: color-mix(in srgb, var(--destructive) 18%, transparent); border-color: color-mix(in srgb, var(--destructive) 60%, transparent); }
+    #flowConc .arrow { align-self: center; color: var(--muted-foreground); font-size: 16px; }
+    #flowConc .panel { margin-top: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); color: var(--card-foreground); padding: 10px 12px; }
+    #flowConc .panel h4 { margin: 0 0 8px; font-size: 13px; }
+    #flowConc .bufrow { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; }
+    #flowConc .bufbox { border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; min-width: 132px; flex: 1 1 132px; }
+    #flowConc .bufbox.full { border-color: color-mix(in srgb, var(--destructive) 65%, transparent); }
+    #flowConc .bhead { font-size: 12px; display: flex; justify-content: space-between; }
+    #flowConc .bcap { color: var(--muted-foreground); }
+    #flowConc .cells { display: flex; gap: 2px; margin: 6px 0; }
+    #flowConc .cell { width: 7px; height: 12px; border-radius: 2px; background: color-mix(in srgb, var(--border) 70%, transparent); }
+    #flowConc .cell.on { background: color-mix(in srgb, var(--viz-series-1) 70%, transparent); }
+    #flowConc .cell.full { background: color-mix(in srgb, var(--destructive) 70%, transparent); }
+    #flowConc .rba { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-top: 6px; }
+    #flowConc .rba .bar { width: 60px; height: 9px; border-radius: 5px; background: color-mix(in srgb, var(--border) 70%, transparent); position: relative; overflow: hidden; }
+    #flowConc .rba .bar i { position: absolute; left: 0; top: 0; bottom: 0; background: color-mix(in srgb, var(--viz-series-1) 70%, transparent); }
+    #flowConc .rba.low .bar i { background: color-mix(in srgb, var(--destructive) 70%, transparent); }
+    #flowConc .threads { font-size: 12px; max-height: 180px; overflow-y: auto; }
+    #flowConc table { border-collapse: collapse; width: 100%; font-size: 12px; }
+    #flowConc th, #flowConc td { text-align: left; padding: 3px 6px; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+    #flowConc .log { font-size: 11.5px; color: var(--muted-foreground); margin-top: 8px; white-space: pre-wrap; }
+    #flowConc .subnote { font-size: 11px; color: var(--muted-foreground); }
+  </style>
+
+  <h3>高并发流水线模拟（v4）：你只调入口速率，其余按 bench 机制自动跑</h3>
+
+  <div class="ctrls">
+    <div class="ctl">注入倍率 <input type="range" id="fcRate" min="1" max="60" value="25"><span class="v"><b id="fcRateV">×25</b></span></div>
+    <div class="ctl">播放速度 <input type="range" id="fcSpeed" min="1" max="60" value="20"><span class="v"><b id="fcSpeedV">20拍/s</b></span></div>
+    <button type="button" class="btn btn-primary" id="fcPlay">▶ 播放（点此开始）</button>
+    <button type="button" class="btn" id="fcStep">单步一拍</button>
+    <button type="button" class="btn" id="fcReset">重置 ↺</button>
+  </div>
+
+  <div class="stats" id="fcStats"></div>
+
+  <div class="pipe">
+    <div class="stage"><div class="name">① 业务源</div><div class="sub">7 流 × 各自平面（见下）</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage"><div class="name">② KOA 入口</div><div class="sub">按优先级排队</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-bp="out"><div class="name">③ KOA 出口</div><div class="sub">每拍交 1 条</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-bp="thm"><div class="name">④ THM</div><div class="sub">保序 + 模板池建线程</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-bp="l1"><div class="name">⑤ 一级发射</div><div class="sub">i/v→q0/q1，c→ct</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-bp="l2"><div class="name">⑥ 二级调度</div><div class="sub">EU×2 + DSE×4</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-bp="rba"><div class="name">⑦ dma/RBA</div><div class="sub">读写延迟归还信用</div><div class="tokens"></div></div>
+  </div>
+  <div class="subnote" style="margin-top:8px">7 条输入流：OH_EXT/OH_INS（各 4 平面）· APS_EXT/APS_INS/ALM（各 8 平面）· UART_EXT/UART_INS —— 写入 KOA 的 5 个 SBUF：EXT(OH+APS) / INS(OH+APS) / ALM / UART_EXT / UART_INS。所以"7 条流"是入口，"5 个缓存"是 KOA 内部组织。</div>
+
+  <div class="panel">
+    <h4>活跃线程（模板池：按来源抽模板；保序键 = 流×32+通道，同键同时最多 1 个线程；线程结束需全部读写完成）</h4>
+    <div class="threads" id="fcThreads"></div>
+    <div class="bufrow" style="margin-top:10px">
+      <div class="bufbox" data-b="q0"><div class="bhead"><span>q0 槽池</span><span class="bcap" id="fcCapQ0"></span></div><div class="cells"></div></div>
+      <div class="bufbox" data-b="q1"><div class="bhead"><span>q1 槽池</span><span class="bcap" id="fcCapQ1"></span></div><div class="cells"></div></div>
+<div class="bufbox" data-b="ct"><div class="bhead"><span>ct 任务池</span><span class="bcap" id="fcCapCT"></span></div><div class="cells"></div></div>
+    </div>
+    <div class="bufrow">
+      <div class="bufbox" data-b="f0"><div class="bhead"><span>DSE0 FIFO</span><span class="bcap" id="fcCapF0"></span></div><div class="cells"></div><div class="rba"><span class="bar"><i></i></span><span class="val" id="fcRba0"></span><span class="pend" id="fcPend0"></span></div></div>
+      <div class="bufbox" data-b="f1"><div class="bhead"><span>DSE1 FIFO</span><span class="bcap" id="fcCapF1"></span></div><div class="cells"></div><div class="rba"><span class="bar"><i></i></span><span class="val" id="fcRba1"></span><span class="pend" id="fcPend1"></span></div></div>
+      <div class="bufbox" data-b="f2"><div class="bhead"><span>DSE2 FIFO</span><span class="bcap" id="fcCapF2"></span></div><div class="cells"></div><div class="rba"><span class="bar"><i></i></span><span class="val" id="fcRba2"></span><span class="pend" id="fcPend2"></span></div></div>
+      <div class="bufbox" data-b="f3"><div class="bhead"><span>DSE3 FIFO</span><span class="bcap" id="fcCapF3"></span></div><div class="cells"></div><div class="rba"><span class="bar"><i></i></span><span class="val" id="fcRba3"></span><span class="pend" id="fcPend3"></span></div></div>
+    </div>
+    <div class="subnote">读写延迟：线程 pri=0 走 L1（写 5-10 / 读 10-15 拍），其余走 SMC（写 10-20 / 读 70-80 拍）；FIFO 出队即发起读写，到期归还信用并算 rw_done。</div>
+  </div>
+
+  <div class="log" id="fcLog" role="status" aria-live="polite"></div>
+
+  <script>
+    (function () {
+      window.addEventListener("error", function (e) {
+        try {
+          var el = document.getElementById("fcLog");
+          if (el) el.textContent += "\n[JS错误] " + (e.message || e);
+        } catch (_) {}
+      });
+      var CAP = { q0: 8, q1: 8, ct: 16, f0: 8, f1: 8, f2: 8, f3: 8 };
+      var SRC = [
+        { name: "OH_EXT", planes: 4, p: 8 / 1235 },
+        { name: "OH_INS", planes: 4, p: 8 / 1235 },
+        { name: "APS_EXT", planes: 8, p: 1 / 1235 },
+        { name: "APS_INS", planes: 8, p: 1 / 1235 },
+        { name: "ALM", planes: 8, p: 4 / 1235 },
+        { name: "UART_EXT", planes: 1, p: 0.06 },
+        { name: "UART_INS", planes: 1, p: 0.06 }
+      ];
+      var C_AVG = [45, 13, 3, 3, 4, 20, 15];
+      var U_W = [6, 4, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 4, 6];
+
+      var S = null;
+      var playing = false;
+      var timer = null;
+
+      function init() {
+        return {
+          tick: 0, rate: 25, speed: 20,
+          entryQ: [], out: null, bufQ: [], threads: [], threadId: 0,
+          q0: [], q1: [], ct: [], fifo: [[], [], [], []],
+          cred: [64, 64, 64, 64], pend: [], // {t, d, tid}
+          peak: { q0: 0, q1: 0, ct: 0, f0: 0, f1: 0, f2: 0, f3: 0 },
+          euBusy: [0, 0], euTid: [0, 0],
+          stat: { inj: 0, drop: 0, create: 0, done: 0, issIv: 0, issC: 0,
+                  dse: 0, deq: 0, bp: 0, rwDone: 0,
+                  issT: 0, euT: 0, dseT: 0, deqT: 0,
+                  perStream: [0, 0, 0, 0, 0, 0, 0] },
+          last: { iv: 0, c: 0, dse: [0, 0, 0, 0], deq: [0, 0, 0, 0],
+                  created: 0, bufIn: 0, bufOut: 0, drop: 0, eu: [false, false] },
+          outBp: false,
+          log: []
+        };
+      }
+
+      function rnd(n) { return Math.floor(Math.random() * n); }
+      function pick(arr) { return arr[rnd(arr.length)]; }
+
+      function makeThread(s, plane, pri) {
+        var cAvg = C_AVG[s];
+        var dk = pick([-2, -1, 1, 2]);
+        var c = Math.max(0, cAvg + dk);
+        var n = new Array(15).fill(0);
+        var tot = 0;
+        for (var j = 0; j < 15; j++) tot += U_W[j];
+        var sum = 0;
+        for (var j = 0; j < 15; j++) { n[j] = Math.min(7, Math.floor(c * U_W[j] / tot)); sum += n[j]; }
+        var rem = c - sum;
+        while (rem > 0) {
+          var placed = false;
+          for (var o = 0; o < 15 && rem > 0; o++) {
+            var order = [0, 14, 1, 13, 2, 12, 3, 11, 4, 10, 5, 9, 6, 8, 7];
+            if (n[order[o]] < 7) { n[order[o]]++; rem--; placed = true; }
+          }
+          if (!placed) break;
+        }
+        var seq = [];
+        seq.push({ t: "iv" });
+        for (var k = 0; k < 15; k++) {
+          seq.push({ t: "iv" });
+          for (var m = 0; m < n[k]; m++) seq.push({ t: "c" });
+        }
+        return {
+          id: S.threadId++, s: s, plane: plane, pri: pri,
+          key: s * 8 + plane, seq: seq, idx: 0,
+          done: 0, rwDone: 0, rwNeed: c, need: seq.length,
+          state: "READY", cool: 0, isL1: pri === 0
+        };
+      }
+
+      function pushLog(m) {
+        S.log.push("t" + S.tick + "  " + m);
+        if (S.log.length > 6) S.log.shift();
+      }
+
+      function tick() {
+        S.tick++;
+        var last = S.last;
+        last.iv = 0; last.c = 0; last.created = 0; last.bufIn = 0; last.bufOut = 0; last.drop = 0;
+        for (var di = 0; di < 4; di++) { last.dse[di] = 0; last.deq[di] = 0; }
+        S.outBp = false;
+        // 1) 注入：7 流 × 平面，按倍率概率
+        for (var s = 0; s < 7; s++) {
+          var src = SRC[s];
+          for (var pl = 0; pl < src.planes; pl++) {
+            if (Math.random() < src.p * S.rate) {
+              var pri = (s === 0 || s === 5) ? 7 : (s === 6 ? rnd(8) : (Math.random() < 0.3 ? 1 : 0));
+              var cid = rnd(32);
+              if (S.entryQ.length < 64) S.entryQ.push({ pri: pri, s: s, plane: pl, cid: cid, key: s * 32 + cid });
+              else { S.stat.drop++; last.drop++; }
+              S.stat.inj++;
+              S.stat.perStream[s]++;
+            }
+          }
+        }
+        // 2) KOA 出口：空则取最高优先级；有则等 THM 接收
+        if (!S.out && S.entryQ.length) {
+          var bi = 0;
+          for (var i = 1; i < S.entryQ.length; i++) if (S.entryQ[i].pri < S.entryQ[bi].pri) bi = i;
+          S.out = S.entryQ.splice(bi, 1)[0];
+        }
+        // 3) THM 接收判定（对齐 RTL：缓存放行拍优先，且该拍对 KOA 反压）
+        var keyFree = function (k) { return !S.threads.some(function (t) { return t.key === k && t.state !== "DONE"; }); };
+        var poolFree = S.threads.length < 64;
+        var bufOk = S.bufQ.length > 0 && keyFree(S.bufQ[0].key) && poolFree;
+        // 对齐 RTL：同键活跃且缓存未满 → 照收进缓存（即使线程池已满）；键空闲才要求池有空位
+        var directOk = !!S.out && (keyFree(S.out.key) ? poolFree : S.bufQ.length < 8);
+        var koRdy = !bufOk && directOk;
+        S.outBp = !!S.out && !koRdy;
+        if (!koRdy && S.out) S.stat.bp++;
+        if (bufOk) {
+          var b = S.bufQ.shift();
+          S.threads.push(makeThread(b.s, b.plane, b.pri));
+          S.stat.create++;
+          last.bufOut++;
+          pushLog("缓存放行 → 建线程（键 " + b.key + "）");
+        } else if (S.out && directOk) {
+          if (keyFree(S.out.key)) {
+            S.threads.push(makeThread(S.out.s, S.out.plane, S.out.pri));
+            S.stat.create++;
+            last.created++;
+          } else {
+            S.bufQ.push(S.out);
+            last.bufIn++;
+            pushLog("同键活跃 → 指令入保序缓存（键 " + S.out.key + "，缓存 " + S.bufQ.length + "/8）");
+          }
+          S.out = null;
+        }
+        // 4) 一级发射：READY 线程按 (pri,id) 取 2
+        var ready = S.threads.filter(function (t) { return t.state === "READY" && t.cool === 0 && t.idx < t.need; });
+        ready.sort(function (a, b) { return a.pri - b.pri || a.id - b.id; });
+        var winners = ready.slice(0, 2);
+        winners.forEach(function (t) {
+          var b = t.seq[t.idx];
+          if (b.t === "iv") {
+            if (S.q0.length < CAP.q0) { S.q0.push({ tid: t.id, pri: t.pri }); S.stat.issIv++; S.stat.issT++; last.iv++; t.cool = 1; t.idx++; t.state = "COOL"; }
+            else if (S.q1.length < CAP.q1) { S.q1.push({ tid: t.id, pri: t.pri }); S.stat.issIv++; S.stat.issT++; last.iv++; t.cool = 1; t.idx++; t.state = "COOL"; }
+          } else {
+            if (S.ct.length < CAP.ct) { S.ct.push({ tid: t.id, pri: t.pri, tag: rnd(4) }); S.stat.issC++; S.stat.issT++; last.c++; t.cool = 1; t.idx++; t.state = "COOL"; }
+          }
+        });
+        S.threads.forEach(function (t) { if (t.state === "COOL") { t.cool--; if (t.cool <= 0) t.state = "READY"; } });
+        // 5) EU：2 个，各执行 1 个 i/v burst（1 拍）
+        last.eu = [S.euBusy[0] > 0, S.euBusy[1] > 0];
+        S.stat.euT += (last.eu[0] ? 1 : 0) + (last.eu[1] ? 1 : 0);
+        for (var eu = 0; eu < 2; eu++) {
+          if (S.euBusy[eu] > 0) { S.euBusy[eu]--; if (S.euBusy[eu] === 0) { var dt = S.euTid[eu]; var th = S.threads.find(function (x) { return x.id === dt; }); if (th) th.done++; } }
+          else {
+            var poolQ = eu === 0 ? S.q0 : S.q1;
+            if (poolQ.length) {
+              var bi2 = 0;
+              for (var j = 1; j < poolQ.length; j++) if (poolQ[j].pri < poolQ[bi2].pri) bi2 = j;
+              var it = poolQ.splice(bi2, 1)[0];
+              S.euBusy[eu] = 1; S.euTid[eu] = it.tid;
+            }
+          }
+        }
+        // 6) DSE：从 ct 按 tag 选任务 → FIFO（发射即完成）
+        for (var d = 0; d < 4; d++) {
+          var idx = S.ct.findIndex(function (x) { return x.tag === d; });
+          if (idx >= 0 && S.fifo[d].length < CAP["f" + d]) {
+            var task = S.ct.splice(idx, 1)[0];
+            S.fifo[d].push(task);
+            S.stat.dse++;
+            S.stat.dseT++;
+            last.dse[d]++;
+            var thd = S.threads.find(function (x) { return x.id === task.tid; });
+            if (thd) thd.done++;
+          }
+        }
+        // 7) FIFO 出队 → 发起读写（信用 -1，按模式延迟归还）
+        for (var d2 = 0; d2 < 4; d2++) {
+          if (S.fifo[d2].length && S.cred[d2] > 0) {
+            var tk = S.fifo[d2].shift();
+            S.cred[d2]--;
+            S.stat.deq++;
+            S.stat.deqT++;
+            last.deq[d2]++;
+            var th2 = S.threads.find(function (x) { return x.id === tk.tid; });
+            var isL1 = th2 ? th2.isL1 : false;
+            var isRead = Math.random() < 0.6;
+            var delay = isL1 ? (isRead ? 10 + rnd(6) : 5 + rnd(6))
+                             : (isRead ? 70 + rnd(11) : 10 + rnd(11));
+            S.pend.push({ t: S.tick + delay, d: d2, tid: tk.tid, rw: isRead ? 1 : 0 });
+          }
+        }
+        // 8) 读写完成：到期归还信用 + rw_done
+        for (var pi = S.pend.length - 1; pi >= 0; pi--) {
+          if (S.pend[pi].t <= S.tick) {
+            var p = S.pend.splice(pi, 1)[0];
+            if (S.cred[p.d] < 64) S.cred[p.d]++;
+            S.stat.rwDone++;
+            var th3 = S.threads.find(function (x) { return x.id === p.tid; });
+            if (th3) th3.rwDone++;
+          }
+        }
+        // 9) 线程结束：done 满且读写全完成 → 释放
+        for (var ti = S.threads.length - 1; ti >= 0; ti--) {
+          var tt = S.threads[ti];
+          if (tt.done >= tt.need && tt.rwDone >= tt.rwNeed) {
+            S.threads.splice(ti, 1);
+            S.stat.done++;
+          }
+        }
+      }
+
+      // ---------- 渲染 ----------
+      function chip(kind, label) { var d = document.createElement("span"); d.className = "chip " + kind; d.textContent = label; return d; }
+
+      function render() {
+        var pipe = document.querySelectorAll("#flowConc .stage");
+        pipe.forEach(function (el) { el.classList.remove("blocked"); });
+        var tok = document.querySelectorAll("#flowConc .stage .tokens");
+        tok.forEach(function (el) { el.innerHTML = ""; });
+        tok[1].appendChild(chip("ko", "指令 ×" + S.entryQ.length));
+        if (S.out) { tok[2].appendChild(chip("ko", "交接中 1 条")); pipe[2].classList.toggle("blocked", S.outBp); }
+        tok[3].appendChild(chip("th", "缓存 ×" + S.bufQ.length));
+        tok[3].appendChild(chip("th", "线程 ×" + S.threads.length));
+        if (S.last.bufIn) tok[3].appendChild(chip("ko", "入缓存 ↑"));
+        if (S.last.bufOut) tok[3].appendChild(chip("th", "放行建线程 ↑"));
+        var l1block = S.threads.some(function (t) { return t.state === "READY" && t.idx < t.need; }) &&
+          ((S.q0.length >= CAP.q0 && S.q1.length >= CAP.q1) || S.ct.length >= CAP.ct);
+        pipe[4].classList.toggle("blocked", l1block);
+        if (S.last.iv) tok[4].appendChild(chip("iv", "i/v ↑" + S.last.iv));
+        if (S.last.c) tok[4].appendChild(chip("c", "c ↑" + S.last.c));
+        if (l1block) tok[4].appendChild(chip("drop", "堵：" + ((S.q0.length >= CAP.q0 && S.q1.length >= CAP.q1) ? "q满" : "ct满")));
+        var l2block = S.fifo.some(function (f) { return f.length >= 8; });
+        pipe[5].classList.toggle("blocked", l2block);
+        for (var dch = 0; dch < 4; dch++) if (S.last.dse[dch]) tok[5].appendChild(chip("c", "DSE" + dch + " ↑"));
+        if (S.last.eu[0]) tok[5].appendChild(chip("iv", "EU0 执行中"));
+        if (S.last.eu[1]) tok[5].appendChild(chip("iv", "EU1 执行中"));
+        var rbablock = S.fifo.some(function (f, i) { return f.length > 0 && S.cred[i] === 0; });
+        pipe[6].classList.toggle("blocked", rbablock);
+        for (var dch2 = 0; dch2 < 4; dch2++) {
+          if (S.last.deq[dch2]) tok[6].appendChild(chip("c", "出队 ↑"));
+          var pd = S.pend.filter(function (p) { return p.d === dch2; });
+          if (pd.length) {
+            var nr = pd.filter(function (x) { return x.rw === 1; }).length;
+            var nw = pd.length - nr;
+            var minT = Math.min.apply(null, pd.map(function (x) { return x.t - S.tick; }));
+            tok[6].appendChild(chip("task", "DSE" + dch2 + " 读" + nr + "写" + nw + " 剩" + minT + "拍"));
+          }
+        }
+        if (S.stat.drop > 0) tok[1].appendChild(chip("drop", "丢弃 ×" + S.stat.drop));
+
+        var st = S.stat;
+        var waitN = S.threads.filter(function (t) { return t.done >= t.need && t.rwDone < t.rwNeed; }).length;
+        var t = Math.max(1, S.tick);
+        var util = {
+          "一级(2/拍)": st.issT / t / 2,
+          "EU(2/拍)": st.euT / t / 2,
+          "DSE(4/拍)": st.dseT / t / 4,
+          "出队+信用(4/拍)": st.deqT / t / 4,
+          "THM建线程(1/拍)": st.create / t
+        };
+        var bn = "未饱和", bnV = 0;
+        ["一级(2/拍)", "EU(2/拍)", "DSE(4/拍)", "出队+信用(4/拍)"].forEach(function (kk) {
+          if (util[kk] > bnV) { bnV = util[kk]; bn = kk; }
+        });
+        var pct = function (v) { return Math.round(100 * v) + "%"; };
+        document.getElementById("fcStats").innerHTML =
+          "注入 <b>" + st.inj + "</b>　丢弃 <b>" + st.drop + "</b>　建线程 <b>" + st.create + "</b>　完成 <b>" + st.done + "</b>" +
+          "　一级 i/v <b>" + st.issIv + "</b> / c <b>" + st.issC + "</b>　DSE <b>" + st.dse + "</b>　出队 <b>" + st.deq + "</b>" +
+          "　在途读写 <b>" + S.pend.length + "</b>　等读写线程 <b>" + waitN + "</b>　反压拍 <b>" + st.bp + "</b><br>" +
+          "利用率：一级 " + pct(util["一级(2/拍)"]) + " · EU " + pct(util["EU(2/拍)"]) + " · DSE " + pct(util["DSE(4/拍)"]) +
+          " · 出队/信用 " + pct(util["出队+信用(4/拍)"]) + " · 建线程 " + pct(util["THM建线程(1/拍)"]) +
+          "　<b>瓶颈：" + bn + (bn === "未饱和" ? "" : "（" + pct(bnV) + "）") + "</b><br>" +
+          "流注入：OH_EXT " + st.perStream[0] + " · OH_INS " + st.perStream[1] + " · APS_EXT " + st.perStream[2] +
+          " · APS_INS " + st.perStream[3] + " · ALM " + st.perStream[4] + " · UART_E " + st.perStream[5] + " · UART_I " + st.perStream[6];
+
+        var tb = document.getElementById("fcThreads");
+        if (!S.threads.length) { tb.innerHTML = '<div class="subnote">（暂无活跃线程：调大注入倍率即可看到线程池被占满）</div>'; }
+        else {
+          var rows = S.threads.slice(0, 8).map(function (t) {
+            var waiting = t.done >= t.need && t.rwDone < t.rwNeed;
+            var stTxt = waiting
+              ? '<span style="color:var(--destructive)">等读写(剩' + (t.rwNeed - t.rwDone) + ')</span>'
+              : (t.state + (t.cool > 0 ? "(" + t.cool + ")" : ""));
+            var pctD = t.need ? Math.round(100 * t.done / t.need) : 0;
+            var pctR = t.rwNeed ? Math.round(100 * t.rwDone / t.rwNeed) : 100;
+            return "<tr><td>#" + t.id + " " + SRC[t.s].name + "-" + t.plane + " pri" + t.pri + "</td>" +
+              "<td>" + stTxt + "</td>" +
+              "<td>发 " + t.idx + "/" + t.need + "</td>" +
+              "<td>完 " + t.done + " (" + pctD + "%)</td>" +
+              "<td>rw " + t.rwDone + "/" + t.rwNeed + " (" + pctR + "%)" + (t.isL1 ? " L1" : " SMC") + "</td></tr>";
+          }).join("");
+          var more = S.threads.length > 8 ? "<tr><td colspan='5' class='subnote'>… 还有 " + (S.threads.length - 8) + " 个（显示最早创建的一批）</td></tr>" : "";
+          tb.innerHTML = "<table><tr><th>线程</th><th>状态</th><th>发射</th><th>完成</th><th>读写</th></tr>" + rows + more + "</table>";
+        }
+
+        var caps = { q0: S.q0.length, q1: S.q1.length, ct: S.ct.length, f0: S.fifo[0].length, f1: S.fifo[1].length, f2: S.fifo[2].length, f3: S.fifo[3].length };
+        for (var b in CAP) {
+          if (caps[b] > S.peak[b]) S.peak[b] = caps[b];
+          var ce = document.getElementById("fcCap" + b.toUpperCase());
+          if (ce) ce.textContent = caps[b] + "/" + CAP[b] + " 峰" + S.peak[b];
+          var box = document.querySelector('#flowConc [data-b="' + b + '"]');
+          box.classList.toggle("full", caps[b] >= CAP[b]);
+          var cells = box.querySelector(".cells");
+          cells.innerHTML = "";
+          for (var k = 0; k < CAP[b]; k++) {
+            var c = document.createElement("span");
+            c.className = "cell" + (k < caps[b] ? " on" : "");
+            if (caps[b] >= CAP[b]) c.className += " full";
+            cells.appendChild(c);
+          }
+        }
+        for (var d = 0; d < 4; d++) {
+          var box2 = document.querySelector('#flowConc [data-b="f' + d + '"]');
+          var rb = box2.querySelector(".rba");
+          rb.classList.toggle("low", S.cred[d] <= 16);
+          rb.querySelector("i").style.width = (100 * S.cred[d] / 64) + "%";
+          var re = document.getElementById("fcRba" + d);
+          if (re) re.textContent = S.cred[d];
+          var pe = document.getElementById("fcPend" + d);
+          if (pe) pe.textContent = "在途" + S.pend.filter(function (p) { return p.d === d; }).length;
+        }
+        var le = document.getElementById("fcLog");
+        if (le) le.textContent = S.log.join("\n");
+        var rve = document.getElementById("fcRateV");
+        if (rve) rve.textContent = "×" + S.rate;
+        var sve = document.getElementById("fcSpeedV");
+        if (sve) sve.textContent = S.speed + "拍/s";
+        var pbe = document.getElementById("fcPlay");
+        if (pbe) pbe.textContent = playing ? "⏸ 暂停（点此停止）" : "▶ 播放（点此开始）";
+      }
+
+      function doTick() { tick(); render(); }
+
+      function play() {
+        if (playing) return;
+        playing = true;
+        timer = setInterval(function () { doTick(); }, Math.max(10, Math.round(1000 / S.speed)));
+        render();
+      }
+      function pause() {
+        playing = false;
+        if (timer) { clearInterval(timer); timer = null; }
+        render();
+      }
+
+      S = init();
+      document.getElementById("fcRate").addEventListener("input", function (e) { S.rate = +e.target.value; render(); });
+      document.getElementById("fcSpeed").addEventListener("input", function (e) {
+        S.speed = +e.target.value;
+        if (playing) { clearInterval(timer); timer = setInterval(function () { doTick(); }, Math.max(10, Math.round(1000 / S.speed))); }
+        render();
+      });
+      document.getElementById("fcPlay").addEventListener("click", function () { playing ? pause() : play(); });
+      document.getElementById("fcStep").addEventListener("click", function () {
+        pause(); doTick(); pushLog("单步：已走到 t" + S.tick); render();
+      });
+      document.getElementById("fcReset").addEventListener("click", function () { pause(); S = init(); render(); });
+      render();
+    })();
+  </script>
+</div>

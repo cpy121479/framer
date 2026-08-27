@@ -1,0 +1,201 @@
+<div id="flowBp">
+  <style>
+    #flowBp { font-family: inherit; }
+    #flowBp h3 { margin: 0 0 10px; }
+    #flowBp .pipe { display: flex; flex-wrap: wrap; gap: 6px; align-items: stretch; }
+    #flowBp .stage {
+      flex: 1 1 128px; min-width: 112px;
+      background: var(--card); color: var(--card-foreground);
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 8px 10px; box-sizing: border-box;
+      transition: outline-color .15s;
+    }
+    #flowBp .stage.active { outline: 2px solid var(--accent); outline-offset: 1px; }
+    #flowBp .stage.blocked { outline: 2px solid var(--destructive); outline-offset: 1px; }
+    #flowBp .stage.drop { outline: 2px solid var(--destructive); outline-offset: 1px; }
+    #flowBp .stage .sno { font-size: 12px; color: var(--muted-foreground); font-weight: 500; }
+    #flowBp .stage .name { font-size: 13px; font-weight: 500; margin-top: 2px; }
+    #flowBp .stage .sub { font-size: 11px; color: var(--muted-foreground); margin-top: 2px; }
+    #flowBp .stage .tokens { min-height: 26px; margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap; }
+    #flowBp .chip {
+      font-size: 11px; padding: 2px 8px; border-radius: 999px;
+      border: 1px solid transparent; display: inline-block;
+    }
+    #flowBp .chip.ko {
+      background: color-mix(in srgb, var(--viz-series-2) 20%, transparent);
+      border-color: color-mix(in srgb, var(--viz-series-2) 55%, transparent);
+    }
+    #flowBp .chip.th {
+      background: color-mix(in srgb, var(--viz-series-3) 20%, transparent);
+      border-color: color-mix(in srgb, var(--viz-series-3) 55%, transparent);
+    }
+    #flowBp .chip.burst {
+      background: color-mix(in srgb, var(--viz-series-4) 20%, transparent);
+      border-color: color-mix(in srgb, var(--viz-series-4) 55%, transparent);
+    }
+    #flowBp .chip.task {
+      background: color-mix(in srgb, var(--viz-series-5) 20%, transparent);
+      border-color: color-mix(in srgb, var(--viz-series-5) 55%, transparent);
+    }
+    #flowBp .chip.drop {
+      background: color-mix(in srgb, var(--destructive) 18%, transparent);
+      border-color: color-mix(in srgb, var(--destructive) 60%, transparent);
+    }
+    #flowBp .arrow { align-self: center; color: var(--muted-foreground); font-size: 16px; }
+    #flowBp .legend { margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted-foreground); }
+    #flowBp .bufs {
+      margin-top: 12px; border: 1px solid var(--border); border-radius: 10px;
+      background: var(--card); color: var(--card-foreground); padding: 10px 12px;
+    }
+    #flowBp .bufs h4 { margin: 0 0 8px; font-size: 13px; }
+    #flowBp .bufrow { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 6px; }
+    #flowBp .buf { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+    #flowBp .buf .bname { color: var(--muted-foreground); white-space: nowrap; }
+    #flowBp .cells { display: flex; gap: 2px; }
+    #flowBp .cell { width: 9px; height: 14px; border-radius: 2px; background: color-mix(in srgb, var(--border) 70%, transparent); }
+    #flowBp .cell.on { background: color-mix(in srgb, var(--viz-series-1) 70%, transparent); }
+    #flowBp .cell.full { background: color-mix(in srgb, var(--destructive) 70%, transparent); }
+    #flowBp .rba .bar { width: 90px; height: 10px; border-radius: 5px; background: color-mix(in srgb, var(--border) 70%, transparent); position: relative; overflow: hidden; }
+    #flowBp .rba .bar i { position: absolute; left: 0; top: 0; bottom: 0; background: color-mix(in srgb, var(--viz-series-1) 70%, transparent); }
+    #flowBp .rba .bar.low i { background: color-mix(in srgb, var(--destructive) 70%, transparent); }
+    #flowBp .rba .val { font-size: 12px; min-width: 34px; }
+    #flowBp .ctrl { margin-top: 10px; display: flex; align-items: center; gap: 10px; }
+    #flowBp .status { flex: 1; font-size: 13px; color: var(--foreground); }
+    #flowBp .stepno { color: var(--muted-foreground); font-size: 12px; white-space: nowrap; }
+  </style>
+
+  <h3>全流程：反压 · 丢弃 · 二级缓存与 FIFO</h3>
+
+  <div class="pipe" id="fpPipe">
+    <div class="stage" data-i="0"><div class="sno">①</div><div class="name">业务源</div><div class="sub">OH / APS / ALM / 串口</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-i="1"><div class="sno">②</div><div class="name">KOA 入口缓存</div><div class="sub">按优先级分格；满了会丢弃</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-i="2"><div class="sno">③</div><div class="name">KOA 出口交接台</div><div class="sub">举手 + 同意才交接</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-i="3"><div class="sno">④</div><div class="name">THM 保序 + 建线程</div><div class="sub">排队检查 + 抽模板剧本</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-i="4"><div class="sno">⑤</div><div class="name">一级发射台</div><div class="sub">每拍选 2 个举牌线程</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-i="5"><div class="sno">⑥</div><div class="name">二级调度</div><div class="sub">EU0/1 + 4×DSE（按 tag）</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-i="6"><div class="sno">⑦</div><div class="name">执行</div><div class="sub">EU 计算 / DMA 读写</div><div class="tokens"></div></div>
+  </div>
+
+  <div class="legend">
+    <span class="chip ko">指令</span>
+    <span class="chip th">线程</span>
+    <span class="chip burst">burst</span>
+    <span class="chip task">任务</span>
+    <span class="chip drop">丢弃</span>
+    <span>红框 = 堵住（反压），红框+丢弃 = 丢掉</span>
+  </div>
+
+  <div class="bufs">
+    <h4>二级调度缓冲区与 FIFO 水位（会随步骤变化）</h4>
+    <div class="bufrow">
+      <div class="buf"><span class="bname">q0 槽池(8)</span><span class="cells" data-b="q0"></span></div>
+      <div class="buf"><span class="bname">q1 槽池(8)</span><span class="cells" data-b="q1"></span></div>
+      <div class="buf"><span class="bname">ct 任务缓存(16)</span><span class="cells" data-b="ct"></span></div>
+    </div>
+    <div class="bufrow">
+      <div class="buf"><span class="bname">DSE0 FIFO(8)</span><span class="cells" data-b="d0"></span></div>
+      <div class="buf"><span class="bname">DSE1 FIFO(8)</span><span class="cells" data-b="d1"></span></div>
+      <div class="buf"><span class="bname">DSE2 FIFO(8)</span><span class="cells" data-b="d2"></span></div>
+      <div class="buf"><span class="bname">DSE3 FIFO(8)</span><span class="cells" data-b="d3"></span></div>
+    </div>
+    <div class="bufrow">
+      <div class="buf rba"><span class="bname">RBA 读写机会</span><span class="bar" id="rbaBar"><i></i></span><span class="val" id="rbaVal"></span></div>
+    </div>
+  </div>
+
+  <div class="ctrl">
+    <button type="button" class="btn btn-primary" id="fpNext">下一步 ▶</button>
+    <div class="status" id="fpStatus" role="status" aria-live="polite"></div>
+    <div class="stepno" id="fpStepno"></div>
+  </div>
+
+  <script>
+    (function () {
+      var Z = { q0: 0, q1: 0, ct: 0, d0: 0, d1: 0, d2: 0, d3: 0, r0: 64 };
+      var CAP = { q0: 8, q1: 8, ct: 16, d0: 8, d1: 8, d2: 8, d3: 8 };
+      function occ(q, n) { var o = {}; for (var k in Z) o[k] = Z[k]; o[q] = n; return o; }
+      function seto(o, patch) { for (var k in patch) o[k] = patch[k]; return o; }
+      var STEPS = [
+        { a: 0, ko: 0, th: -1, burst: -1, task: -1, drop: 0, blk: -1, o: occ("q0", 0), s: "业务源按各自节奏发出指令：开销按帧周期、串口随机到达。" },
+        { a: 1, ko: 1, th: -1, burst: -1, task: -1, drop: 0, blk: -1, o: occ("q0", 0), s: "指令带着优先级编号进场，放进 KOA 入口对应的优先级格。" },
+        { a: 1, ko: -1, th: -1, burst: -1, task: -1, drop: 1, blk: -1, o: occ("q0", 0), s: "【丢弃】某个优先级格满了：KOA 直接清空该格（丢已缓存+本拍候选），入口不反压，只上报告警。这是全链路唯一会丢报文的地方。" },
+        { a: 2, ko: 2, th: -1, burst: -1, task: -1, drop: 0, blk: -1, o: occ("q0", 0), s: "正常路径：出口从最高优先级格取一条，举手(valid)，等下游同意(ready)才交接。" },
+        { a: 2, ko: 2, th: -1, burst: -1, task: -1, drop: 0, blk: 2, o: occ("q0", 0), s: "【反压①】THM 忙（线程池满或保序排队中）→ 说“现在不能收”→ KOA 出口保持原样等待，不丢。" },
+        { a: 3, ko: 3, th: 3, burst: -1, task: -1, drop: 0, blk: -1, o: occ("q0", 0), s: "THM 恢复交接：保序检查通过 → 新建线程，从模板库随机抽一份剧本；优先级继承指令。" },
+        { a: 4, ko: -1, th: 4, burst: -1, task: -1, drop: 0, blk: -1, o: occ("q0", 0), s: "线程就绪举牌 READY，一级发射台扫牌，挑优先级最高、编号最前的（每拍≤2）。" },
+        { a: 5, ko: -1, th: 5, burst: 5, task: -1, drop: 0, blk: -1, o: occ("q0", 1), s: "选中 i/v burst → 落进 q0 槽池（q1 同理），等二级调度去取。" },
+        { a: 4, ko: -1, th: 4, burst: -1, task: -1, drop: 0, blk: 4, o: occ("q0", 8), s: "【反压②】q0/q1 槽池全满 → 一级发射压住该线程：本拍不发射，线程保持举牌，等槽空出来再发。" },
+        { a: 5, ko: -1, th: 5, burst: -1, task: 5, drop: 0, blk: -1, o: occ("ct", 2), s: "选中 c_task burst → 一级发射把它拆成单个任务（带 DMA 号 + 标签 tag）→ 进 ct 任务缓存。" },
+        { a: 4, ko: -1, th: 4, burst: -1, task: -1, drop: 0, blk: 4, o: occ("ct", 16), s: "【反压③】ct 任务缓存满 → c_task 发射被压：burst 留在线程里，不丢，等缓存有位置。" },
+        { a: 5, ko: -1, th: 5, burst: -1, task: 6, drop: 0, blk: -1, o: occ("d0", 1), s: "二级调度：4 个 DSE 各自按标签(tag)从 ct 里选任务，发射即完成(done)，任务推入对应 DSE 的 FIFO。" },
+        { a: 5, ko: -1, th: 5, burst: -1, task: 5, drop: 0, blk: 5, o: occ("d0", 8), s: "【反压④】DSE0 的 c_task FIFO 满 → 该 DSE 本拍不发射，任务留在 ct 缓存（不丢），下拍再选。" },
+        { a: 5, ko: -1, th: 5, burst: -1, task: 5, drop: 0, blk: 5, o: seto(occ("d0", 8), { r0: 0 }), s: "【反压⑤】RBA 读写机会用完(credit=0) → dma 停止从 FIFO 出队 → FIFO 越积越满 → 连锁反压到 DSE 发射，一路传回。" },
+        { a: 5, ko: -1, th: 5, burst: -1, task: 6, drop: 0, blk: -1, o: seto(occ("d0", 3), { r0: 30 }), s: "读写完成、credit 归还 → dma 恢复出队 → FIFO 腾出空间 → DSE 恢复发射，整条链松开。" },
+        { a: 6, ko: -1, th: 6, burst: -1, task: 6, drop: 0, blk: -1, o: seto(occ("q0", 0), { d0: 0 }), s: "done 带 ts 序号回 THM → 线程推进/结束，一个完整生命周期走完。" }
+      ];
+      var idx = 0;
+      var root = document.getElementById("flowBp");
+      var btn = document.getElementById("fpNext");
+      var status = document.getElementById("fpStatus");
+      var stepno = document.getElementById("fpStepno");
+      var stages = root.querySelectorAll(".stage");
+      var tokens = root.querySelectorAll(".stage .tokens");
+
+      function chip(kind, label) {
+        var d = document.createElement("span");
+        d.className = "chip " + kind;
+        d.textContent = label;
+        return d;
+      }
+
+      function drawBufs(o) {
+        for (var b in CAP) {
+          var el = root.querySelector('[data-b="' + b + '"]');
+          el.innerHTML = "";
+          for (var i = 0; i < CAP[b]; i++) {
+            var c = document.createElement("span");
+            c.className = "cell" + (i < o[b] ? " on" : "");
+            if (o[b] >= CAP[b]) c.className += " full";
+            el.appendChild(c);
+          }
+        }
+        var bar = document.getElementById("rbaBar");
+        var val = document.getElementById("rbaVal");
+        bar.className = "bar" + (o.r0 <= 16 ? " low" : "");
+        bar.querySelector("i").style.width = (100 * o.r0 / 64) + "%";
+        val.textContent = o.r0 + " / 64";
+      }
+
+      function render() {
+        var st = STEPS[idx];
+        for (var i = 0; i < stages.length; i++) {
+          stages[i].classList.toggle("active", st.a === i);
+          stages[i].classList.toggle("blocked", st.blk === i);
+          stages[i].classList.toggle("drop", st.drop === i);
+          tokens[i].innerHTML = "";
+        }
+        if (st.ko >= 0) tokens[st.ko].appendChild(chip("ko", "指令"));
+        if (st.th >= 0) tokens[st.th].appendChild(chip("th", "线程"));
+        if (st.burst >= 0) tokens[st.burst].appendChild(chip("burst", "burst"));
+        if (st.task >= 0) tokens[st.task].appendChild(chip("task", "任务"));
+        if (st.drop) tokens[st.a].appendChild(chip("drop", "✕ 丢弃"));
+        drawBufs(st.o);
+        status.textContent = st.s;
+        stepno.textContent = (idx + 1) + " / " + STEPS.length;
+        btn.textContent = (idx === STEPS.length - 1) ? "从头看 ↺" : "下一步 ▶";
+      }
+
+      btn.addEventListener("click", function () {
+        idx = (idx + 1) % STEPS.length;
+        render();
+      });
+      render();
+    })();
+  </script>
+</div>

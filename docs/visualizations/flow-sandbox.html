@@ -1,0 +1,266 @@
+<div id="flowSand">
+  <style>
+    #flowSand { font-family: inherit; }
+    #flowSand h3 { margin: 0 0 10px; }
+    #flowSand .pipe { display: flex; flex-wrap: wrap; gap: 6px; align-items: stretch; }
+    #flowSand .stage {
+      flex: 1 1 128px; min-width: 112px;
+      background: var(--card); color: var(--card-foreground);
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 8px 10px; box-sizing: border-box;
+    }
+    #flowSand .stage.active { outline: 2px solid var(--accent); outline-offset: 1px; }
+    #flowSand .stage.blocked { outline: 2px solid var(--destructive); outline-offset: 1px; }
+    #flowSand .stage .sno { font-size: 12px; color: var(--muted-foreground); font-weight: 500; }
+    #flowSand .stage .name { font-size: 13px; font-weight: 500; margin-top: 2px; }
+    #flowSand .stage .sub { font-size: 11px; color: var(--muted-foreground); margin-top: 2px; }
+    #flowSand .stage .tokens { min-height: 26px; margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap; }
+    #flowSand .chip {
+      font-size: 11px; padding: 2px 8px; border-radius: 999px;
+      border: 1px solid transparent; display: inline-block;
+    }
+    #flowSand .chip.ko { background: color-mix(in srgb, var(--viz-series-2) 20%, transparent); border-color: color-mix(in srgb, var(--viz-series-2) 55%, transparent); }
+    #flowSand .chip.th { background: color-mix(in srgb, var(--viz-series-3) 20%, transparent); border-color: color-mix(in srgb, var(--viz-series-3) 55%, transparent); }
+    #flowSand .chip.burst { background: color-mix(in srgb, var(--viz-series-4) 20%, transparent); border-color: color-mix(in srgb, var(--viz-series-4) 55%, transparent); }
+    #flowSand .chip.drop { background: color-mix(in srgb, var(--destructive) 18%, transparent); border-color: color-mix(in srgb, var(--destructive) 60%, transparent); }
+    #flowSand .arrow { align-self: center; color: var(--muted-foreground); font-size: 16px; }
+    #flowSand .legend { margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted-foreground); }
+    #flowSand .ctrls { margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    #flowSand .status { margin-top: 8px; font-size: 13px; color: var(--foreground); min-height: 18px; }
+    #flowSand .subnote { font-size: 11px; color: var(--muted-foreground); }
+    #flowSand .bufgrid { margin-top: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); color: var(--card-foreground); padding: 10px 12px; }
+    #flowSand .bufgrid h4 { margin: 0 0 8px; font-size: 13px; }
+    #flowSand .bufrow { display: flex; flex-wrap: wrap; gap: 10px; }
+    #flowSand .bufbox { border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; min-width: 148px; flex: 1 1 148px; }
+    #flowSand .bufbox.full { border-color: color-mix(in srgb, var(--destructive) 65%, transparent); }
+    #flowSand .bhead { font-size: 12px; display: flex; justify-content: space-between; }
+    #flowSand .bcap { color: var(--muted-foreground); }
+    #flowSand .cells { display: flex; gap: 2px; margin: 6px 0; }
+    #flowSand .cell { width: 8px; height: 13px; border-radius: 2px; background: color-mix(in srgb, var(--border) 70%, transparent); }
+    #flowSand .cell.on { background: color-mix(in srgb, var(--viz-series-1) 70%, transparent); }
+    #flowSand .cell.full { background: color-mix(in srgb, var(--destructive) 70%, transparent); }
+    #flowSand .bacts { display: flex; gap: 4px; flex-wrap: wrap; }
+    #flowSand .rba { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-top: 6px; }
+    #flowSand .rba .bar { width: 70px; height: 9px; border-radius: 5px; background: color-mix(in srgb, var(--border) 70%, transparent); position: relative; overflow: hidden; }
+    #flowSand .rba .bar i { position: absolute; left: 0; top: 0; bottom: 0; background: color-mix(in srgb, var(--viz-series-1) 70%, transparent); }
+    #flowSand .rba.low .bar i { background: color-mix(in srgb, var(--destructive) 70%, transparent); }
+    #flowSand .rba .val { min-width: 30px; }
+  </style>
+
+  <h3>反压 · 丢弃 · 二级缓存 —— 调试沙盘</h3>
+
+  <div class="pipe" id="fsPipe">
+    <div class="stage" data-i="0"><div class="sno">①</div><div class="name">业务源</div><div class="sub">OH / APS / ALM / 串口</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-i="1"><div class="sno">②</div><div class="name">KOA 入口缓存</div><div class="sub">满了会丢弃</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-i="2"><div class="sno">③</div><div class="name">KOA 出口交接台</div><div class="sub">举手 + 同意才交接</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-i="3"><div class="sno">④</div><div class="name">THM 保序 + 线程</div><div class="sub">排队检查 + 模板剧本</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-i="4"><div class="sno">⑤</div><div class="name">一级发射台</div><div class="sub">i/v → q0/q1；c → ct</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-i="5"><div class="sno">⑥</div><div class="name">二级调度（4×DSE）</div><div class="sub">发射即完成 → FIFO</div><div class="tokens"></div></div>
+    <div class="arrow">→</div>
+    <div class="stage" data-i="6"><div class="sno">⑦</div><div class="name">dma_ctrl / RBA</div><div class="sub">FIFO 出队 + 读写机会</div><div class="tokens"></div></div>
+  </div>
+
+  <div class="legend">
+    <span class="chip ko">指令</span>
+    <span class="chip th">线程</span>
+    <span class="chip burst">burst</span>
+    <span class="chip drop">✕ 丢弃</span>
+    <span>红框 = 堵住（反压）；红格 = 满</span>
+  </div>
+
+  <div class="ctrls">
+    <button type="button" class="btn" id="fsPrev">◀ 上一步</button>
+    <button type="button" class="btn btn-primary" id="fsStep">推进一拍 ▶</button>
+    <button type="button" class="btn" id="fsSpawn">业务源发一条指令</button>
+    <button type="button" class="btn" id="fsDrop">模拟 KOA 段满丢弃</button>
+    <button type="button" class="btn" id="fsReset">重置 ↺</button>
+    <label class="form-check"><input type="checkbox" class="form-check-input" id="fsBusy"><span class="form-check-label">THM 忙（反压 KOA 出口）</span></label>
+  </div>
+  <div class="status" id="fsStatus" role="status" aria-live="polite"></div>
+
+  <div class="bufgrid">
+    <h4>二级调度缓冲区（＋ = 手动加积压，－ = 调走；DSE 块内"发射"从任务池取任务进 FIFO）</h4>
+    <div class="bufrow">
+      <div class="bufbox" data-b="q0"><div class="bhead"><span>q0 槽池</span><span class="bcap" id="cap-q0"></span></div><div class="cells"></div><div class="bacts"><button type="button" class="btn" data-act="plus">＋积压</button><button type="button" class="btn" data-act="minus">－调走</button></div></div>
+      <div class="bufbox" data-b="q1"><div class="bhead"><span>q1 槽池</span><span class="bcap" id="cap-q1"></span></div><div class="cells"></div><div class="bacts"><button type="button" class="btn" data-act="plus">＋积压</button><button type="button" class="btn" data-act="minus">－调走</button></div></div>
+      <div class="bufbox" data-b="ct"><div class="bhead"><span>ct 任务池</span><span class="bcap" id="cap-ct"></span></div><div class="cells"></div><div class="bacts"><button type="button" class="btn" data-act="plus">＋积压</button><button type="button" class="btn" data-act="minus">－调走</button></div></div>
+    </div>
+    <div class="bufrow" style="margin-top:10px">
+      <div class="bufbox" data-b="f0" data-dse="0"><div class="bhead"><span>DSE0 FIFO</span><span class="bcap" id="cap-f0"></span></div><div class="cells"></div><div class="rba"><span class="bar"><i></i></span><span class="val" id="rba-f0"></span></div><div class="bacts"><button type="button" class="btn" data-act="plus">＋积压</button><button type="button" class="btn" data-act="minus">－调走</button><button type="button" class="btn" data-act="emit">发射(任务→FIFO)</button><button type="button" class="btn" data-act="deq">出队(耗信用)</button><button type="button" class="btn" data-act="refund">＋归还信用</button></div></div>
+      <div class="bufbox" data-b="f1" data-dse="1"><div class="bhead"><span>DSE1 FIFO</span><span class="bcap" id="cap-f1"></span></div><div class="cells"></div><div class="rba"><span class="bar"><i></i></span><span class="val" id="rba-f1"></span></div><div class="bacts"><button type="button" class="btn" data-act="plus">＋积压</button><button type="button" class="btn" data-act="minus">－调走</button><button type="button" class="btn" data-act="emit">发射</button><button type="button" class="btn" data-act="deq">出队</button><button type="button" class="btn" data-act="refund">＋归还</button></div></div>
+      <div class="bufbox" data-b="f2" data-dse="2"><div class="bhead"><span>DSE2 FIFO</span><span class="bcap" id="cap-f2"></span></div><div class="cells"></div><div class="rba"><span class="bar"><i></i></span><span class="val" id="rba-f2"></span></div><div class="bacts"><button type="button" class="btn" data-act="plus">＋积压</button><button type="button" class="btn" data-act="minus">－调走</button><button type="button" class="btn" data-act="emit">发射</button><button type="button" class="btn" data-act="deq">出队</button><button type="button" class="btn" data-act="refund">＋归还</button></div></div>
+      <div class="bufbox" data-b="f3" data-dse="3"><div class="bhead"><span>DSE3 FIFO</span><span class="bcap" id="cap-f3"></span></div><div class="cells"></div><div class="rba"><span class="bar"><i></i></span><span class="val" id="rba-f3"></span></div><div class="bacts"><button type="button" class="btn" data-act="plus">＋积压</button><button type="button" class="btn" data-act="minus">－调走</button><button type="button" class="btn" data-act="emit">发射</button><button type="button" class="btn" data-act="deq">出队</button><button type="button" class="btn" data-act="refund">＋归还</button></div></div>
+    </div>
+    <div class="subnote">简化说明：ct 是共享任务池，任意 DSE 都可以从中"发射"（真实设计按 tag 匹配 DSE）；每出队 1 个任务消耗 1 个 RBA 信用点，信用点需手动归还，归还不及时就会连锁堵住。</div>
+  </div>
+
+  <script>
+    (function () {
+      var CAP = { q0: 8, q1: 8, ct: 16, f0: 8, f1: 8, f2: 8, f3: 8 };
+      function init() {
+        return {
+          ko: -1, thCreated: false, thReady: false, thCool: 0, ivNext: true,
+          q0: 0, q1: 0, ct: 0, f0: 0, f1: 0, f2: 0, f3: 0,
+          r0: 64, r1: 64, r2: 64, r3: 64,
+          thmBusy: false, dropShow: false, log: "欢迎：先点「业务源发一条指令」，再「推进一拍」"
+        };
+      }
+      var state = init();
+      var history = [];
+      var root = document.getElementById("flowSand");
+      var stages = root.querySelectorAll(".stage");
+      var tokens = root.querySelectorAll(".stage .tokens");
+      var status = document.getElementById("fsStatus");
+      var busyBox = document.getElementById("fsBusy");
+
+      function snap() { history.push(JSON.parse(JSON.stringify(state))); if (history.length > 200) history.shift(); }
+      function undo() { if (!history.length) return false; state = history.pop(); return true; }
+      function chip(kind, label) { var d = document.createElement("span"); d.className = "chip " + kind; d.textContent = label; return d; }
+
+      function blockedStages() {
+        var b = {};
+        if (state.ko === 2 && state.thmBusy) b[2] = 1;
+        if (state.thCreated && state.thReady && state.thCool === 0) {
+          if (state.ivNext && state.q0 >= CAP.q0 && state.q1 >= CAP.q1) b[4] = 1;
+          if (!state.ivNext && state.ct >= CAP.ct) b[4] = 1;
+        }
+        if (state.f0 >= CAP.f0 || state.f1 >= CAP.f1 || state.f2 >= CAP.f2 || state.f3 >= CAP.f3) b[5] = 1;
+        if ((state.f0 > 0 && state.r0 === 0) || (state.f1 > 0 && state.r1 === 0) ||
+            (state.f2 > 0 && state.r2 === 0) || (state.f3 > 0 && state.r3 === 0)) b[6] = 1;
+        return b;
+      }
+
+      function render() {
+        var blk = blockedStages();
+        for (var i = 0; i < stages.length; i++) {
+          stages[i].classList.toggle("blocked", !!blk[i]);
+          tokens[i].innerHTML = "";
+        }
+        if (state.ko >= 0) tokens[state.ko].appendChild(chip("ko", "指令"));
+        if (state.thCreated) tokens[state.thReady ? 4 : 3].appendChild(chip("th", "线程"));
+        if (state.dropShow) tokens[1].appendChild(chip("drop", "✕ 丢弃"));
+        var th = (state.thCreated ? (state.thReady ? "就绪举牌" : state.thCool > 0 ? "冷却" + state.thCool + "拍" : "已建") : "未建");
+        var ivlbl = state.ivNext ? "下次发 i/v" : "下次发 c";
+        status.textContent = state.log + "　|　线程:" + th + "　" + ivlbl;
+        for (var b in CAP) {
+          var box = root.querySelector('[data-b="' + b + '"]');
+          var capEl = document.getElementById("cap-" + b);
+          capEl.textContent = state[b] + "/" + CAP[b];
+          box.classList.toggle("full", state[b] >= CAP[b]);
+          var cells = box.querySelector(".cells");
+          cells.innerHTML = "";
+          for (var k = 0; k < CAP[b]; k++) {
+            var c = document.createElement("span");
+            c.className = "cell" + (k < state[b] ? " on" : "");
+            if (state[b] >= CAP[b]) c.className += " full";
+            cells.appendChild(c);
+          }
+        }
+        for (var d = 0; d < 4; d++) {
+          var r = state["r" + d];
+          var box = root.querySelector('[data-b="f' + d + '"]');
+          var bar = box.querySelector(".rba");
+          bar.classList.toggle("low", r <= 16);
+          bar.querySelector("i").style.width = (100 * r / 64) + "%";
+          document.getElementById("rba-f" + d).textContent = r;
+        }
+        busyBox.checked = state.thmBusy;
+        document.getElementById("fsPrev").disabled = history.length === 0;
+      }
+
+      function doStep() {
+        snap();
+        if (state.dropShow) state.dropShow = false;
+        if (state.ko === 0) { state.ko = 1; state.log = "指令进 KOA 入口缓存，按优先级入格"; render(); return; }
+        if (state.ko === 1) { state.ko = 2; state.log = "KOA 出口从最高优先级格取一条，举手等下游同意"; render(); return; }
+        if (state.ko === 2) {
+          if (state.thmBusy) { state.log = "THM 忙 → 出口保持等待（不丢）"; render(); return; }
+          state.ko = 3; state.log = "下游同意，指令交接给 THM"; render(); return;
+        }
+        if (state.ko === 3 && !state.thCreated) {
+          state.thCreated = true; state.thReady = true; state.ko = -1;
+          state.log = "THM 建线程：从模板库抽一份剧本，线程就绪举牌"; render(); return;
+        }
+        if (state.thCreated && state.thReady && state.thCool === 0) {
+          if (state.ivNext) {
+            if (state.q0 < CAP.q0) { state.q0++; state.thReady = false; state.thCool = 1; state.ivNext = false; state.log = "发射 i/v burst → q0"; }
+            else if (state.q1 < CAP.q1) { state.q1++; state.thReady = false; state.thCool = 1; state.ivNext = false; state.log = "q0 满，i/v burst → q1"; }
+            else state.log = "q0/q1 都满：i/v 发射被压，线程保持举牌";
+          } else {
+            if (state.ct < CAP.ct) { state.ct++; state.thReady = false; state.thCool = 1; state.ivNext = true; state.log = "发射 c_task burst → 拆成任务进 ct"; }
+            else state.log = "ct 满：c_task 发射被压，线程保持举牌";
+          }
+          render(); return;
+        }
+        if (state.thCreated && state.thCool > 0) {
+          state.thCool--;
+          if (state.thCool === 0) { state.thReady = true; state.log = "线程冷却结束，回举牌区"; }
+          else state.log = "线程冷却中…";
+          render(); return;
+        }
+        var moved = false;
+        for (var d = 0; d < 4; d++) {
+          if (state.ct > 0 && state["f" + d] < CAP["f" + d]) { state.ct--; state["f" + d]++; moved = true; }
+          if (state["f" + d] > 0 && state["r" + d] > 0) { state["f" + d]--; state["r" + d]--; moved = true; }
+        }
+        state.log = moved ? "二级：DSE 发射任务进 FIFO / FIFO 出队消耗信用" : "空闲：没有可动的东西，先「业务源发一条指令」";
+        render();
+      }
+
+      function bump(b, delta, label) {
+        snap();
+        var n = state[b] + delta;
+        if (n < 0) n = 0;
+        if (n > CAP[b]) n = CAP[b];
+        state[b] = n;
+        state.log = label + (delta > 0 ? "＋1" : "－1") + " → " + n + "/" + CAP[b];
+        render();
+      }
+
+      document.getElementById("fsPrev").addEventListener("click", function () { if (undo()) { state.log = "已回退一步"; render(); } });
+      document.getElementById("fsStep").addEventListener("click", doStep);
+      document.getElementById("fsSpawn").addEventListener("click", function () {
+        snap();
+        if (state.ko === -1) { state.ko = 0; state.log = "业务源发出一条指令（带优先级）"; }
+        else state.log = "已有一条指令在路上，先等它走完";
+        render();
+      });
+      document.getElementById("fsDrop").addEventListener("click", function () {
+        snap();
+        if (state.ko === 1) { state.ko = -1; state.dropShow = true; state.log = "模拟：该优先级格已满 → 清空丢弃 + 告警（唯一丢报文的地方）"; }
+        else state.log = "指令不在 KOA 入口（位置 " + state.ko + "），无法演示丢弃";
+        render();
+      });
+      document.getElementById("fsReset").addEventListener("click", function () { snap(); state = init(); render(); });
+      busyBox.addEventListener("change", function () { snap(); state.thmBusy = busyBox.checked; state.log = busyBox.checked ? "THM 忙：ko_rdy=0，KOA 出口原地等待（不丢）" : "THM 空闲：交接恢复"; render(); });
+
+      root.querySelectorAll("[data-act]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var act = btn.getAttribute("data-act");
+          var box = btn.closest("[data-b]");
+          var b = box.getAttribute("data-b");
+          var d = box.getAttribute("data-dse");
+          if (act === "plus" || act === "minus") { bump(b, act === "plus" ? 1 : -1, b); return; }
+          snap();
+          if (act === "emit") {
+            if (state.ct > 0 && state["f" + d] < CAP["f" + d]) { state.ct--; state["f" + d]++; state.log = "DSE" + d + " 发射：任务从 ct → FIFO（发射即完成）"; }
+            else state.log = "DSE" + d + " 无法发射：" + (state.ct === 0 ? "ct 没任务" : "FIFO 满");
+          } else if (act === "deq") {
+            if (state["f" + d] > 0 && state["r" + d] > 0) { state["f" + d]--; state["r" + d]--; state.log = "DSE" + d + " 出队 1 个任务，信用 " + state["r" + d] + "/64"; }
+            else state.log = "DSE" + d + " 无法出队：" + (state["f" + d] === 0 ? "FIFO 空" : "信用为 0（先＋归还信用）");
+          } else if (act === "refund") {
+            if (state["r" + d] < 64) { state["r" + d]++; state.log = "DSE" + d + " 归还 1 信用 → " + state["r" + d] + "/64"; }
+            else state.log = "信用已满 64";
+          }
+          render();
+        });
+      });
+      render();
+    })();
+  </script>
+</div>

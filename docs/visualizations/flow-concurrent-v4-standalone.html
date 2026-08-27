@@ -1,0 +1,1618 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Flow Concurrent</title>
+<style>:root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;height:calc(100vh - 2rem);margin:0 auto;border:0}</style>
+</head>
+<body>
+<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="Flow Concurrent" srcdoc="&lt;!doctype html&gt;
+&lt;html lang=&quot;en&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+&lt;meta name=&quot;referrer&quot; content=&quot;no-referrer&quot;&gt;
+&lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27; &#x27;unsafe-eval&#x27; &#x27;wasm-unsafe-eval&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src &#x27;unsafe-inline&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src &#x27;none&#x27;; object-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;&quot;&gt;
+&lt;title&gt;Flow Concurrent&lt;/title&gt;
+&lt;style&gt;:root {
+  color-scheme: light dark;
+  background-color: var(
+    --background,
+    var(--color-background-primary, light-dark(rgb(255 255 255), rgb(24 24 24)))
+  ) !important;
+
+  /* Agent-facing contract; keep in sync with SKILL.md. */
+  --background: var(
+    --color-background-primary,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --card: color-mix(in oklab, var(--foreground) 5%, var(--background));
+  --card-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --popover: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255), rgb(45 45 45))
+  );
+  --popover-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --primary: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --primary-foreground: var(
+    --color-text-inverse,
+    light-dark(rgb(255 255 255), rgb(13 13 13))
+  );
+  --secondary: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255 / 96%), rgb(54 54 54 / 96%))
+  );
+  --secondary-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --muted: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --muted-foreground: var(
+    --color-text-secondary,
+    light-dark(rgb(26 28 31 / 49.4%), rgb(255 255 255 / 49.8%))
+  );
+  --accent: var(
+    --color-background-info,
+    light-dark(rgb(229 242 255), rgb(13 39 63))
+  );
+  --accent-foreground: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --destructive: var(
+    --color-text-warning,
+    light-dark(rgb(226 85 7), rgb(255 133 73))
+  );
+  --border: var(
+    --color-border-secondary,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+  --input: var(
+    --color-border-primary,
+    light-dark(
+      rgb(26 28 31 / 11.8%),
+      color-mix(in oklab, rgb(0 0 0) 10%, transparent)
+    )
+  );
+  --ring: var(
+    --color-ring-primary,
+    light-dark(rgb(51 156 255), rgb(131 195 255 / 76%))
+  );
+  --font-size-base: var(--font-text-md-size, 14px);
+  --blue: light-dark(rgb(51 156 255), rgb(51 156 255));
+  --orange: light-dark(rgb(226 85 7), rgb(251 106 34));
+  --green: light-dark(rgb(0 162 64), rgb(64 201 119));
+  --red: light-dark(rgb(224 46 42), rgb(255 103 100));
+  --purple: light-dark(rgb(146 79 247), rgb(173 123 249));
+  --yellow: light-dark(rgb(255 195 0), rgb(255 210 64));
+  --viz-series-1: var(--primary);
+  --viz-series-2: light-dark(rgb(243 136 59), rgb(245 154 86));
+  --viz-series-3: light-dark(rgb(93 201 119), rgb(116 213 139));
+  --viz-series-4: light-dark(rgb(235 119 177), rgb(240 143 192));
+  --viz-series-5: light-dark(rgb(155 121 236), rgb(170 145 239));
+  --viz-series-6: light-dark(rgb(58 185 177), rgb(90 203 194));
+
+  /* Internal implementation variables; not part of the agent contract. */
+  --font-sans: -apple-system, system-ui, &quot;Segoe UI&quot;, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, &quot;SF Mono&quot;, Menlo, Consolas, &quot;Liberation Mono&quot;,
+    monospace;
+  --font-size-normal: max(11px, var(--font-size-base));
+  --font-size-tooltip: calc(var(--font-size-base) - 1px);
+  --font-size-small: max(11px, calc(var(--font-size-base) - 2px));
+  --font-size-h1: calc(var(--font-size-normal) * 1.7142857143);
+  --font-size-h2: calc(var(--font-size-normal) * 1.4285714286);
+  --font-size-h3: calc(var(--font-size-normal) * 1.2857142857);
+  --font-weight-normal: 430;
+  --font-weight-medium: 500;
+  --line-height-normal: calc(var(--font-size-normal) * 1.5);
+  --line-height-tooltip: calc(var(--font-size-tooltip) * 1.4285714286);
+  --line-height-small: calc(var(--font-size-small) + 4px);
+  --radius: var(--border-radius-lg, 12.5px);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-2xl: calc(var(--radius) * 1.6);
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px -1px rgb(0 0 0 / 8%);
+  --checkmark-image: url(&quot;data:image/svg+xml,%3Csvg xmlns=&#x27;http://www.w3.org/2000/svg&#x27; viewBox=&#x27;0 0 17 17&#x27;%3E%3Cpath d=&#x27;M12.8961 3.64101C13.1297 3.41418 13.4984 3.37523 13.7779 3.56581C14.0571 3.75635 14.1554 4.11331 14.0299 4.41347L13.9615 4.53847L7.71151 13.7045C7.59411 13.8767 7.4063 13.9877 7.19881 14.0072C6.99136 14.0267 6.78564 13.9533 6.63826 13.806L2.88826 10.056L2.79842 9.9457C2.6192 9.67407 2.64927 9.30496 2.88826 9.06581C3.12738 8.82669 3.49647 8.79676 3.76815 8.97597L3.8785 9.06581L7.03084 12.2182L12.8053 3.74941L12.8961 3.64101Z&#x27;/%3E%3C/svg%3E&quot;);
+
+  /* Legacy aliases; not part of the current agent contract. */
+  --viz-bg: transparent;
+  --viz-panel: var(--card);
+  --viz-border: var(--border);
+  --viz-text: var(--foreground);
+  --viz-muted: var(--muted-foreground);
+  --viz-accent: var(--primary);
+  --viz-accent-text: var(--primary-foreground);
+  --viz-accent-bg: var(--accent);
+  --viz-font-size: var(--font-size-base);
+  --viz-warning: var(--destructive);
+}
+
+:root[data-theme=&quot;light&quot;] {
+  color-scheme: light;
+}
+
+:root[data-theme=&quot;dark&quot;] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html &gt; body {
+  /* Preserve MCP aliases for older inline renderers without creating :root cycles. */
+  --color-background-primary: var(
+    --background,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --color-text-primary: var(
+    --foreground,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --color-border-secondary: var(
+    --border,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+
+  margin: 0;
+  padding: 5px;
+  color: var(--foreground);
+  background: transparent !important;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-normal);
+  font-weight: var(--font-weight-normal);
+  line-height: var(--line-height-normal);
+}
+
+a {
+  color: color-mix(in srgb, var(--viz-accent) 80%, var(--viz-text) 20%);
+  cursor: pointer;
+  font-weight: var(--font-weight-medium, 500);
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+
+a:is(:hover, :focus-visible) {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 0.5px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin-block: 0;
+}
+
+h1 {
+  font-size: var(--font-size-h1);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h2 {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h3,
+h4,
+h5,
+h6 {
+  font-size: var(--font-size-h3);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.3;
+}
+
+b,
+strong,
+th {
+  font-weight: var(--font-weight-medium);
+}
+
+code:not(pre code) {
+  display: inline;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  word-break: break-word;
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+}
+
+.table :is(th, td) {
+  padding-block: 10px;
+  padding-inline: 0 24px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+}
+
+.table-responsive &gt; .table :is(th, td) {
+  overflow-wrap: break-word;
+}
+
+.table :is(th, td):last-child {
+  padding-inline-end: 0;
+}
+
+.table :is(caption, thead th) {
+  font-weight: 600;
+}
+
+.table thead th {
+  padding-block: 8px;
+  border-bottom-color: color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+.table tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+
+.table.table-sm :is(th, td) {
+  padding-block: 6px;
+}
+
+.table.table-sm :is(th, td):not(:last-child) {
+  padding-inline-end: 16px;
+}
+
+.table :is(.text-end, [align=&quot;right&quot;]) {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.table :is(.text-center, [align=&quot;center&quot;]) {
+  text-align: center;
+}
+
+.table .text-nowrap {
+  white-space: nowrap;
+}
+
+#widget {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  background: transparent !important;
+}
+
+.card {
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  border-radius: var(--radius-2xl);
+  corner-shape: superellipse(1.5);
+  color: var(--card-foreground);
+  background: var(--card);
+}
+
+#widget &gt; :not(.card, .progress) {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.tooltip {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  left: 0;
+  width: max-content;
+  max-width: min(
+    20rem,
+    var(--tooltip-available-width, calc(100vw - 10px)),
+    calc(100vw - 10px)
+  );
+  max-height: min(
+    var(--tooltip-available-height, calc(100vh - 10px)),
+    calc(100vh - 10px)
+  );
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--popover-foreground);
+  background: var(--popover);
+  box-shadow: none;
+  font-size: var(--font-size-tooltip);
+  line-height: var(--line-height-tooltip);
+  overflow-wrap: break-word;
+  white-space: normal;
+  pointer-events: none;
+  user-select: none;
+}
+
+.viz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(max(180px, 24%), 1fr));
+  gap: 10px;
+}
+
+.viz-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viz-stat-value {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+.viz-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.progress {
+  display: flex;
+  height: 6px;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+}
+
+.progress-bar {
+  height: 100%;
+  flex-shrink: 0;
+  border: 0;
+  background: var(--viz-series-1);
+}
+
+.viz-badge {
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  color: var(--accent-foreground);
+  background: var(--accent);
+  font-weight: var(--font-weight-medium);
+}
+
+small,
+.text-small,
+.viz-badge {
+  font-size: var(--font-size-small);
+  line-height: var(--line-height-small);
+}
+
+.text-muted {
+  color: var(--muted-foreground);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.viz-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.viz-controls &gt; .form-label {
+  display: grid;
+  min-width: min(100%, 260px);
+  flex: 1 1 280px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: 0;
+}
+
+.viz-controls &gt; .form-label &gt; :is(.form-control, .form-range, .form-select) {
+  grid-column: 1 / -1;
+}
+
+.btn,
+.form-check-input,
+.form-control,
+.form-range,
+.form-select {
+  font: inherit;
+}
+
+.btn {
+  appearance: button;
+  display: inline-flex;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: var(--cursor-interaction, pointer);
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.btn:is(.btn-block, .viz-tile) {
+  inline-size: 100%;
+}
+
+.btn.viz-tile {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+a.btn {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn-primary {
+  border-color: transparent;
+  color: var(--primary-foreground);
+  background: var(--foreground);
+  background-clip: padding-box;
+}
+
+.btn-primary .text-muted {
+  color: color-mix(in srgb, var(--primary-foreground) 50%, transparent);
+}
+
+.btn-primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 80%, transparent);
+  background-clip: padding-box;
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.btn-ghost:not(:disabled):hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+[data-lucide] {
+  stroke-width: 1.6;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--foreground);
+}
+
+.form-control {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--foreground);
+  background: var(--secondary);
+}
+
+.form-control::placeholder {
+  color: var(--muted-foreground);
+}
+
+.form-control[type=&quot;file&quot;] {
+  padding: 0;
+  overflow: hidden;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control[type=&quot;file&quot;]::file-selector-button {
+  min-height: 26px;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--input);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: inherit;
+  font: inherit;
+}
+
+.form-control[type=&quot;file&quot;]:not(:disabled):hover::file-selector-button {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-control-color[type=&quot;color&quot;] {
+  width: 40px;
+  height: 28px;
+  padding: 3px;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 4px);
+  corner-shape: superellipse(1.5);
+}
+
+textarea.form-control {
+  height: auto;
+  min-height: 72px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.form-control:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-control:disabled,
+.form-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.form-select {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  margin: 0;
+  padding: 0 32px 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--foreground);
+  background-color: var(--secondary);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%),
+    linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 10px) 50%;
+  background-repeat: no-repeat;
+  background-size: 4px 4px;
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-select:not(:disabled):hover {
+  background-color: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-select:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-check {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-check-input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--input);
+  color: var(--primary-foreground);
+  background-color: transparent;
+  cursor: var(--cursor-interaction, default);
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;] {
+  border-color: var(--input);
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+  background-color: var(--secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input:not(:disabled):not(:checked):hover {
+  background-color: var(--card);
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;]:checked {
+  border-color: var(--primary);
+  background-color: var(--primary);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;checkbox&quot;]:checked::before {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--primary-foreground);
+  content: &quot;&quot;;
+  mask: var(--checkmark-image) center / 12px 12px no-repeat;
+}
+
+.form-check-input[type=&quot;radio&quot;] {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+}
+
+.form-check-input[type=&quot;radio&quot;]:checked {
+  border: 2px solid var(--primary);
+  background:
+    radial-gradient(circle, var(--primary-foreground) 0 2.5px, transparent 3px),
+    var(--primary);
+}
+
+.form-check:not(.form-switch) .form-check-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+}
+
+.form-switch .form-check-input:disabled,
+.form-switch .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.form-check-label {
+  color: var(--foreground);
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-switch .form-check-input {
+  position: relative;
+  width: 32px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  box-shadow: none;
+  transition: background-color 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid light-dark(var(--primary-foreground), var(--foreground));
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+  box-shadow: var(--shadow-sm);
+  content: &quot;&quot;;
+  transform: translate(2px, -50%);
+  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input:checked {
+  background: var(--primary);
+}
+
+.form-switch .form-check-input:checked::before {
+  transform: translate(14px, -50%);
+}
+
+.form-switch .form-check-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.form-range {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 28px;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  outline: none;
+  border: 0;
+  accent-color: var(--primary);
+  background: linear-gradient(
+      color-mix(in srgb, var(--foreground) 7%, transparent),
+      color-mix(in srgb, var(--foreground) 7%, transparent)
+    )
+    center / 100% 2px no-repeat;
+}
+
+.form-range::-webkit-slider-runnable-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-webkit-slider-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range::-moz-range-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-moz-range-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn:not(.btn-primary, .viz-tile):is(
+  [aria-pressed=&quot;true&quot;],
+  [aria-selected=&quot;true&quot;],
+  .is-selected
+) {
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+
+.btn.viz-tile:is([aria-pressed=&quot;true&quot;], [aria-selected=&quot;true&quot;], .is-selected) {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#widget &gt; svg {
+  width: 100%;
+}
+
+/* Model-authored chart rules can otherwise stretch icons after these styles load. */
+svg.lucide {
+  display: block;
+  width: 16px !important;
+  height: 16px !important;
+  flex: none;
+  margin: 0 !important;
+  stroke-width: 1.6;
+}
+
+.text-warning,
+.text-destructive {
+  color: var(--destructive);
+}
+
+html&gt;body{padding:0}&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div id=&quot;flowConc&quot;&gt;
+  &lt;style&gt;
+    #flowConc { font-family: inherit; }
+    #flowConc h3 { margin: 0 0 8px; }
+    #flowConc .ctrls { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+    #flowConc .ctl { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+    #flowConc .ctl input[type=range] { width: 130px; }
+    #flowConc .ctl .v { color: var(--muted-foreground); min-width: 26px; }
+    #flowConc .stats { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; font-size: 12px; color: var(--muted-foreground); }
+    #flowConc .stats b { color: var(--foreground); font-weight: 500; }
+    #flowConc .pipe { display: flex; flex-wrap: wrap; gap: 6px; align-items: stretch; }
+    #flowConc .stage {
+      flex: 1 1 122px; min-width: 108px;
+      background: var(--card); color: var(--card-foreground);
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 8px 10px; box-sizing: border-box;
+    }
+    #flowConc .stage.blocked { outline: 2px solid var(--destructive); outline-offset: 1px; }
+    #flowConc .stage .name { font-size: 13px; font-weight: 500; }
+    #flowConc .stage .sub { font-size: 11px; color: var(--muted-foreground); margin-top: 2px; }
+    #flowConc .stage .tokens { min-height: 26px; margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap; }
+    #flowConc .chip {
+      font-size: 11px; padding: 2px 8px; border-radius: 999px;
+      border: 1px solid transparent; display: inline-block;
+    }
+    #flowConc .chip.ko { background: color-mix(in srgb, var(--viz-series-2) 20%, transparent); border-color: color-mix(in srgb, var(--viz-series-2) 55%, transparent); }
+    #flowConc .chip.th { background: color-mix(in srgb, var(--viz-series-3) 20%, transparent); border-color: color-mix(in srgb, var(--viz-series-3) 55%, transparent); }
+    #flowConc .chip.iv { background: color-mix(in srgb, var(--viz-series-4) 20%, transparent); border-color: color-mix(in srgb, var(--viz-series-4) 55%, transparent); }
+    #flowConc .chip.c { background: color-mix(in srgb, var(--viz-series-5) 20%, transparent); border-color: color-mix(in srgb, var(--viz-series-5) 55%, transparent); }
+    #flowConc .chip.task { background: color-mix(in srgb, var(--viz-series-6) 20%, transparent); border-color: color-mix(in srgb, var(--viz-series-6) 55%, transparent); }
+    #flowConc .chip.drop { background: color-mix(in srgb, var(--destructive) 18%, transparent); border-color: color-mix(in srgb, var(--destructive) 60%, transparent); }
+    #flowConc .arrow { align-self: center; color: var(--muted-foreground); font-size: 16px; }
+    #flowConc .panel { margin-top: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); color: var(--card-foreground); padding: 10px 12px; }
+    #flowConc .panel h4 { margin: 0 0 8px; font-size: 13px; }
+    #flowConc .bufrow { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; }
+    #flowConc .bufbox { border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; min-width: 132px; flex: 1 1 132px; }
+    #flowConc .bufbox.full { border-color: color-mix(in srgb, var(--destructive) 65%, transparent); }
+    #flowConc .bhead { font-size: 12px; display: flex; justify-content: space-between; }
+    #flowConc .bcap { color: var(--muted-foreground); }
+    #flowConc .cells { display: flex; gap: 2px; margin: 6px 0; }
+    #flowConc .cell { width: 7px; height: 12px; border-radius: 2px; background: color-mix(in srgb, var(--border) 70%, transparent); }
+    #flowConc .cell.on { background: color-mix(in srgb, var(--viz-series-1) 70%, transparent); }
+    #flowConc .cell.full { background: color-mix(in srgb, var(--destructive) 70%, transparent); }
+    #flowConc .rba { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-top: 6px; }
+    #flowConc .rba .bar { width: 60px; height: 9px; border-radius: 5px; background: color-mix(in srgb, var(--border) 70%, transparent); position: relative; overflow: hidden; }
+    #flowConc .rba .bar i { position: absolute; left: 0; top: 0; bottom: 0; background: color-mix(in srgb, var(--viz-series-1) 70%, transparent); }
+    #flowConc .rba.low .bar i { background: color-mix(in srgb, var(--destructive) 70%, transparent); }
+    #flowConc .threads { font-size: 12px; max-height: 180px; overflow-y: auto; }
+    #flowConc table { border-collapse: collapse; width: 100%; font-size: 12px; }
+    #flowConc th, #flowConc td { text-align: left; padding: 3px 6px; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+    #flowConc .log { font-size: 11.5px; color: var(--muted-foreground); margin-top: 8px; white-space: pre-wrap; }
+    #flowConc .subnote { font-size: 11px; color: var(--muted-foreground); }
+  &lt;/style&gt;
+
+  &lt;h3&gt;高并发流水线模拟（v4）：你只调入口速率，其余按 bench 机制自动跑&lt;/h3&gt;
+
+  &lt;div class=&quot;ctrls&quot;&gt;
+    &lt;div class=&quot;ctl&quot;&gt;注入倍率 &lt;input type=&quot;range&quot; id=&quot;fcRate&quot; min=&quot;1&quot; max=&quot;60&quot; value=&quot;25&quot;&gt;&lt;span class=&quot;v&quot;&gt;&lt;b id=&quot;fcRateV&quot;&gt;×25&lt;/b&gt;&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;ctl&quot;&gt;播放速度 &lt;input type=&quot;range&quot; id=&quot;fcSpeed&quot; min=&quot;1&quot; max=&quot;60&quot; value=&quot;20&quot;&gt;&lt;span class=&quot;v&quot;&gt;&lt;b id=&quot;fcSpeedV&quot;&gt;20拍/s&lt;/b&gt;&lt;/span&gt;&lt;/div&gt;
+    &lt;button type=&quot;button&quot; class=&quot;btn btn-primary&quot; id=&quot;fcPlay&quot;&gt;▶ 播放（点此开始）&lt;/button&gt;
+    &lt;button type=&quot;button&quot; class=&quot;btn&quot; id=&quot;fcStep&quot;&gt;单步一拍&lt;/button&gt;
+    &lt;button type=&quot;button&quot; class=&quot;btn&quot; id=&quot;fcReset&quot;&gt;重置 ↺&lt;/button&gt;
+  &lt;/div&gt;
+
+  &lt;div class=&quot;stats&quot; id=&quot;fcStats&quot;&gt;&lt;/div&gt;
+
+  &lt;div class=&quot;pipe&quot;&gt;
+    &lt;div class=&quot;stage&quot;&gt;&lt;div class=&quot;name&quot;&gt;① 业务源&lt;/div&gt;&lt;div class=&quot;sub&quot;&gt;7 流 × 各自平面（见下）&lt;/div&gt;&lt;div class=&quot;tokens&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+    &lt;div class=&quot;arrow&quot;&gt;→&lt;/div&gt;
+    &lt;div class=&quot;stage&quot;&gt;&lt;div class=&quot;name&quot;&gt;② KOA 入口&lt;/div&gt;&lt;div class=&quot;sub&quot;&gt;按优先级排队&lt;/div&gt;&lt;div class=&quot;tokens&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+    &lt;div class=&quot;arrow&quot;&gt;→&lt;/div&gt;
+    &lt;div class=&quot;stage&quot; data-bp=&quot;out&quot;&gt;&lt;div class=&quot;name&quot;&gt;③ KOA 出口&lt;/div&gt;&lt;div class=&quot;sub&quot;&gt;每拍交 1 条&lt;/div&gt;&lt;div class=&quot;tokens&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+    &lt;div class=&quot;arrow&quot;&gt;→&lt;/div&gt;
+    &lt;div class=&quot;stage&quot; data-bp=&quot;thm&quot;&gt;&lt;div class=&quot;name&quot;&gt;④ THM&lt;/div&gt;&lt;div class=&quot;sub&quot;&gt;保序 + 模板池建线程&lt;/div&gt;&lt;div class=&quot;tokens&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+    &lt;div class=&quot;arrow&quot;&gt;→&lt;/div&gt;
+    &lt;div class=&quot;stage&quot; data-bp=&quot;l1&quot;&gt;&lt;div class=&quot;name&quot;&gt;⑤ 一级发射&lt;/div&gt;&lt;div class=&quot;sub&quot;&gt;i/v→q0/q1，c→ct&lt;/div&gt;&lt;div class=&quot;tokens&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+    &lt;div class=&quot;arrow&quot;&gt;→&lt;/div&gt;
+    &lt;div class=&quot;stage&quot; data-bp=&quot;l2&quot;&gt;&lt;div class=&quot;name&quot;&gt;⑥ 二级调度&lt;/div&gt;&lt;div class=&quot;sub&quot;&gt;EU×2 + DSE×4&lt;/div&gt;&lt;div class=&quot;tokens&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+    &lt;div class=&quot;arrow&quot;&gt;→&lt;/div&gt;
+    &lt;div class=&quot;stage&quot; data-bp=&quot;rba&quot;&gt;&lt;div class=&quot;name&quot;&gt;⑦ dma/RBA&lt;/div&gt;&lt;div class=&quot;sub&quot;&gt;读写延迟归还信用&lt;/div&gt;&lt;div class=&quot;tokens&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;subnote&quot; style=&quot;margin-top:8px&quot;&gt;7 条输入流：OH_EXT/OH_INS（各 4 平面）· APS_EXT/APS_INS/ALM（各 8 平面）· UART_EXT/UART_INS —— 写入 KOA 的 5 个 SBUF：EXT(OH+APS) / INS(OH+APS) / ALM / UART_EXT / UART_INS。所以&quot;7 条流&quot;是入口，&quot;5 个缓存&quot;是 KOA 内部组织。&lt;/div&gt;
+
+  &lt;div class=&quot;panel&quot;&gt;
+    &lt;h4&gt;活跃线程（模板池：按来源抽模板；保序键 = 流×32+通道，同键同时最多 1 个线程；线程结束需全部读写完成）&lt;/h4&gt;
+    &lt;div class=&quot;threads&quot; id=&quot;fcThreads&quot;&gt;&lt;/div&gt;
+    &lt;div class=&quot;bufrow&quot; style=&quot;margin-top:10px&quot;&gt;
+      &lt;div class=&quot;bufbox&quot; data-b=&quot;q0&quot;&gt;&lt;div class=&quot;bhead&quot;&gt;&lt;span&gt;q0 槽池&lt;/span&gt;&lt;span class=&quot;bcap&quot; id=&quot;fcCapQ0&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;cells&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+      &lt;div class=&quot;bufbox&quot; data-b=&quot;q1&quot;&gt;&lt;div class=&quot;bhead&quot;&gt;&lt;span&gt;q1 槽池&lt;/span&gt;&lt;span class=&quot;bcap&quot; id=&quot;fcCapQ1&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;cells&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+&lt;div class=&quot;bufbox&quot; data-b=&quot;ct&quot;&gt;&lt;div class=&quot;bhead&quot;&gt;&lt;span&gt;ct 任务池&lt;/span&gt;&lt;span class=&quot;bcap&quot; id=&quot;fcCapCT&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;cells&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+    &lt;/div&gt;
+    &lt;div class=&quot;bufrow&quot;&gt;
+      &lt;div class=&quot;bufbox&quot; data-b=&quot;f0&quot;&gt;&lt;div class=&quot;bhead&quot;&gt;&lt;span&gt;DSE0 FIFO&lt;/span&gt;&lt;span class=&quot;bcap&quot; id=&quot;fcCapF0&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;cells&quot;&gt;&lt;/div&gt;&lt;div class=&quot;rba&quot;&gt;&lt;span class=&quot;bar&quot;&gt;&lt;i&gt;&lt;/i&gt;&lt;/span&gt;&lt;span class=&quot;val&quot; id=&quot;fcRba0&quot;&gt;&lt;/span&gt;&lt;span class=&quot;pend&quot; id=&quot;fcPend0&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;
+      &lt;div class=&quot;bufbox&quot; data-b=&quot;f1&quot;&gt;&lt;div class=&quot;bhead&quot;&gt;&lt;span&gt;DSE1 FIFO&lt;/span&gt;&lt;span class=&quot;bcap&quot; id=&quot;fcCapF1&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;cells&quot;&gt;&lt;/div&gt;&lt;div class=&quot;rba&quot;&gt;&lt;span class=&quot;bar&quot;&gt;&lt;i&gt;&lt;/i&gt;&lt;/span&gt;&lt;span class=&quot;val&quot; id=&quot;fcRba1&quot;&gt;&lt;/span&gt;&lt;span class=&quot;pend&quot; id=&quot;fcPend1&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;
+      &lt;div class=&quot;bufbox&quot; data-b=&quot;f2&quot;&gt;&lt;div class=&quot;bhead&quot;&gt;&lt;span&gt;DSE2 FIFO&lt;/span&gt;&lt;span class=&quot;bcap&quot; id=&quot;fcCapF2&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;cells&quot;&gt;&lt;/div&gt;&lt;div class=&quot;rba&quot;&gt;&lt;span class=&quot;bar&quot;&gt;&lt;i&gt;&lt;/i&gt;&lt;/span&gt;&lt;span class=&quot;val&quot; id=&quot;fcRba2&quot;&gt;&lt;/span&gt;&lt;span class=&quot;pend&quot; id=&quot;fcPend2&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;
+      &lt;div class=&quot;bufbox&quot; data-b=&quot;f3&quot;&gt;&lt;div class=&quot;bhead&quot;&gt;&lt;span&gt;DSE3 FIFO&lt;/span&gt;&lt;span class=&quot;bcap&quot; id=&quot;fcCapF3&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;cells&quot;&gt;&lt;/div&gt;&lt;div class=&quot;rba&quot;&gt;&lt;span class=&quot;bar&quot;&gt;&lt;i&gt;&lt;/i&gt;&lt;/span&gt;&lt;span class=&quot;val&quot; id=&quot;fcRba3&quot;&gt;&lt;/span&gt;&lt;span class=&quot;pend&quot; id=&quot;fcPend3&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;
+    &lt;/div&gt;
+    &lt;div class=&quot;subnote&quot;&gt;读写延迟：线程 pri=0 走 L1（写 5-10 / 读 10-15 拍），其余走 SMC（写 10-20 / 读 70-80 拍）；FIFO 出队即发起读写，到期归还信用并算 rw_done。&lt;/div&gt;
+  &lt;/div&gt;
+
+  &lt;div class=&quot;log&quot; id=&quot;fcLog&quot; role=&quot;status&quot; aria-live=&quot;polite&quot;&gt;&lt;/div&gt;
+
+  &lt;script&gt;
+    (function () {
+      window.addEventListener(&quot;error&quot;, function (e) {
+        try {
+          var el = document.getElementById(&quot;fcLog&quot;);
+          if (el) el.textContent += &quot;\n[JS错误] &quot; + (e.message || e);
+        } catch (_) {}
+      });
+      var CAP = { q0: 8, q1: 8, ct: 16, f0: 8, f1: 8, f2: 8, f3: 8 };
+      var SRC = [
+        { name: &quot;OH_EXT&quot;, planes: 4, p: 8 / 1235 },
+        { name: &quot;OH_INS&quot;, planes: 4, p: 8 / 1235 },
+        { name: &quot;APS_EXT&quot;, planes: 8, p: 1 / 1235 },
+        { name: &quot;APS_INS&quot;, planes: 8, p: 1 / 1235 },
+        { name: &quot;ALM&quot;, planes: 8, p: 4 / 1235 },
+        { name: &quot;UART_EXT&quot;, planes: 1, p: 0.06 },
+        { name: &quot;UART_INS&quot;, planes: 1, p: 0.06 }
+      ];
+      var C_AVG = [45, 13, 3, 3, 4, 20, 15];
+      var U_W = [6, 4, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 4, 6];
+
+      var S = null;
+      var playing = false;
+      var timer = null;
+
+      function init() {
+        return {
+          tick: 0, rate: 25, speed: 20,
+          entryQ: [], out: null, bufQ: [], threads: [], threadId: 0,
+          q0: [], q1: [], ct: [], fifo: [[], [], [], []],
+          cred: [64, 64, 64, 64], pend: [], // {t, d, tid}
+          peak: { q0: 0, q1: 0, ct: 0, f0: 0, f1: 0, f2: 0, f3: 0 },
+          euBusy: [0, 0], euTid: [0, 0],
+          stat: { inj: 0, drop: 0, create: 0, done: 0, issIv: 0, issC: 0,
+                  dse: 0, deq: 0, bp: 0, rwDone: 0,
+                  issT: 0, euT: 0, dseT: 0, deqT: 0,
+                  perStream: [0, 0, 0, 0, 0, 0, 0] },
+          last: { iv: 0, c: 0, dse: [0, 0, 0, 0], deq: [0, 0, 0, 0],
+                  created: 0, bufIn: 0, bufOut: 0, drop: 0, eu: [false, false] },
+          outBp: false,
+          log: []
+        };
+      }
+
+      function rnd(n) { return Math.floor(Math.random() * n); }
+      function pick(arr) { return arr[rnd(arr.length)]; }
+
+      function makeThread(s, plane, pri) {
+        var cAvg = C_AVG[s];
+        var dk = pick([-2, -1, 1, 2]);
+        var c = Math.max(0, cAvg + dk);
+        var n = new Array(15).fill(0);
+        var tot = 0;
+        for (var j = 0; j &lt; 15; j++) tot += U_W[j];
+        var sum = 0;
+        for (var j = 0; j &lt; 15; j++) { n[j] = Math.min(7, Math.floor(c * U_W[j] / tot)); sum += n[j]; }
+        var rem = c - sum;
+        while (rem &gt; 0) {
+          var placed = false;
+          for (var o = 0; o &lt; 15 &amp;&amp; rem &gt; 0; o++) {
+            var order = [0, 14, 1, 13, 2, 12, 3, 11, 4, 10, 5, 9, 6, 8, 7];
+            if (n[order[o]] &lt; 7) { n[order[o]]++; rem--; placed = true; }
+          }
+          if (!placed) break;
+        }
+        var seq = [];
+        seq.push({ t: &quot;iv&quot; });
+        for (var k = 0; k &lt; 15; k++) {
+          seq.push({ t: &quot;iv&quot; });
+          for (var m = 0; m &lt; n[k]; m++) seq.push({ t: &quot;c&quot; });
+        }
+        return {
+          id: S.threadId++, s: s, plane: plane, pri: pri,
+          key: s * 8 + plane, seq: seq, idx: 0,
+          done: 0, rwDone: 0, rwNeed: c, need: seq.length,
+          state: &quot;READY&quot;, cool: 0, isL1: pri === 0
+        };
+      }
+
+      function pushLog(m) {
+        S.log.push(&quot;t&quot; + S.tick + &quot;  &quot; + m);
+        if (S.log.length &gt; 6) S.log.shift();
+      }
+
+      function tick() {
+        S.tick++;
+        var last = S.last;
+        last.iv = 0; last.c = 0; last.created = 0; last.bufIn = 0; last.bufOut = 0; last.drop = 0;
+        for (var di = 0; di &lt; 4; di++) { last.dse[di] = 0; last.deq[di] = 0; }
+        S.outBp = false;
+        // 1) 注入：7 流 × 平面，按倍率概率
+        for (var s = 0; s &lt; 7; s++) {
+          var src = SRC[s];
+          for (var pl = 0; pl &lt; src.planes; pl++) {
+            if (Math.random() &lt; src.p * S.rate) {
+              var pri = (s === 0 || s === 5) ? 7 : (s === 6 ? rnd(8) : (Math.random() &lt; 0.3 ? 1 : 0));
+              var cid = rnd(32);
+              if (S.entryQ.length &lt; 64) S.entryQ.push({ pri: pri, s: s, plane: pl, cid: cid, key: s * 32 + cid });
+              else { S.stat.drop++; last.drop++; }
+              S.stat.inj++;
+              S.stat.perStream[s]++;
+            }
+          }
+        }
+        // 2) KOA 出口：空则取最高优先级；有则等 THM 接收
+        if (!S.out &amp;&amp; S.entryQ.length) {
+          var bi = 0;
+          for (var i = 1; i &lt; S.entryQ.length; i++) if (S.entryQ[i].pri &lt; S.entryQ[bi].pri) bi = i;
+          S.out = S.entryQ.splice(bi, 1)[0];
+        }
+        // 3) THM 接收判定（对齐 RTL：缓存放行拍优先，且该拍对 KOA 反压）
+        var keyFree = function (k) { return !S.threads.some(function (t) { return t.key === k &amp;&amp; t.state !== &quot;DONE&quot;; }); };
+        var poolFree = S.threads.length &lt; 64;
+        var bufOk = S.bufQ.length &gt; 0 &amp;&amp; keyFree(S.bufQ[0].key) &amp;&amp; poolFree;
+        // 对齐 RTL：同键活跃且缓存未满 → 照收进缓存（即使线程池已满）；键空闲才要求池有空位
+        var directOk = !!S.out &amp;&amp; (keyFree(S.out.key) ? poolFree : S.bufQ.length &lt; 8);
+        var koRdy = !bufOk &amp;&amp; directOk;
+        S.outBp = !!S.out &amp;&amp; !koRdy;
+        if (!koRdy &amp;&amp; S.out) S.stat.bp++;
+        if (bufOk) {
+          var b = S.bufQ.shift();
+          S.threads.push(makeThread(b.s, b.plane, b.pri));
+          S.stat.create++;
+          last.bufOut++;
+          pushLog(&quot;缓存放行 → 建线程（键 &quot; + b.key + &quot;）&quot;);
+        } else if (S.out &amp;&amp; directOk) {
+          if (keyFree(S.out.key)) {
+            S.threads.push(makeThread(S.out.s, S.out.plane, S.out.pri));
+            S.stat.create++;
+            last.created++;
+          } else {
+            S.bufQ.push(S.out);
+            last.bufIn++;
+            pushLog(&quot;同键活跃 → 指令入保序缓存（键 &quot; + S.out.key + &quot;，缓存 &quot; + S.bufQ.length + &quot;/8）&quot;);
+          }
+          S.out = null;
+        }
+        // 4) 一级发射：READY 线程按 (pri,id) 取 2
+        var ready = S.threads.filter(function (t) { return t.state === &quot;READY&quot; &amp;&amp; t.cool === 0 &amp;&amp; t.idx &lt; t.need; });
+        ready.sort(function (a, b) { return a.pri - b.pri || a.id - b.id; });
+        var winners = ready.slice(0, 2);
+        winners.forEach(function (t) {
+          var b = t.seq[t.idx];
+          if (b.t === &quot;iv&quot;) {
+            if (S.q0.length &lt; CAP.q0) { S.q0.push({ tid: t.id, pri: t.pri }); S.stat.issIv++; S.stat.issT++; last.iv++; t.cool = 1; t.idx++; t.state = &quot;COOL&quot;; }
+            else if (S.q1.length &lt; CAP.q1) { S.q1.push({ tid: t.id, pri: t.pri }); S.stat.issIv++; S.stat.issT++; last.iv++; t.cool = 1; t.idx++; t.state = &quot;COOL&quot;; }
+          } else {
+            if (S.ct.length &lt; CAP.ct) { S.ct.push({ tid: t.id, pri: t.pri, tag: rnd(4) }); S.stat.issC++; S.stat.issT++; last.c++; t.cool = 1; t.idx++; t.state = &quot;COOL&quot;; }
+          }
+        });
+        S.threads.forEach(function (t) { if (t.state === &quot;COOL&quot;) { t.cool--; if (t.cool &lt;= 0) t.state = &quot;READY&quot;; } });
+        // 5) EU：2 个，各执行 1 个 i/v burst（1 拍）
+        last.eu = [S.euBusy[0] &gt; 0, S.euBusy[1] &gt; 0];
+        S.stat.euT += (last.eu[0] ? 1 : 0) + (last.eu[1] ? 1 : 0);
+        for (var eu = 0; eu &lt; 2; eu++) {
+          if (S.euBusy[eu] &gt; 0) { S.euBusy[eu]--; if (S.euBusy[eu] === 0) { var dt = S.euTid[eu]; var th = S.threads.find(function (x) { return x.id === dt; }); if (th) th.done++; } }
+          else {
+            var poolQ = eu === 0 ? S.q0 : S.q1;
+            if (poolQ.length) {
+              var bi2 = 0;
+              for (var j = 1; j &lt; poolQ.length; j++) if (poolQ[j].pri &lt; poolQ[bi2].pri) bi2 = j;
+              var it = poolQ.splice(bi2, 1)[0];
+              S.euBusy[eu] = 1; S.euTid[eu] = it.tid;
+            }
+          }
+        }
+        // 6) DSE：从 ct 按 tag 选任务 → FIFO（发射即完成）
+        for (var d = 0; d &lt; 4; d++) {
+          var idx = S.ct.findIndex(function (x) { return x.tag === d; });
+          if (idx &gt;= 0 &amp;&amp; S.fifo[d].length &lt; CAP[&quot;f&quot; + d]) {
+            var task = S.ct.splice(idx, 1)[0];
+            S.fifo[d].push(task);
+            S.stat.dse++;
+            S.stat.dseT++;
+            last.dse[d]++;
+            var thd = S.threads.find(function (x) { return x.id === task.tid; });
+            if (thd) thd.done++;
+          }
+        }
+        // 7) FIFO 出队 → 发起读写（信用 -1，按模式延迟归还）
+        for (var d2 = 0; d2 &lt; 4; d2++) {
+          if (S.fifo[d2].length &amp;&amp; S.cred[d2] &gt; 0) {
+            var tk = S.fifo[d2].shift();
+            S.cred[d2]--;
+            S.stat.deq++;
+            S.stat.deqT++;
+            last.deq[d2]++;
+            var th2 = S.threads.find(function (x) { return x.id === tk.tid; });
+            var isL1 = th2 ? th2.isL1 : false;
+            var isRead = Math.random() &lt; 0.6;
+            var delay = isL1 ? (isRead ? 10 + rnd(6) : 5 + rnd(6))
+                             : (isRead ? 70 + rnd(11) : 10 + rnd(11));
+            S.pend.push({ t: S.tick + delay, d: d2, tid: tk.tid, rw: isRead ? 1 : 0 });
+          }
+        }
+        // 8) 读写完成：到期归还信用 + rw_done
+        for (var pi = S.pend.length - 1; pi &gt;= 0; pi--) {
+          if (S.pend[pi].t &lt;= S.tick) {
+            var p = S.pend.splice(pi, 1)[0];
+            if (S.cred[p.d] &lt; 64) S.cred[p.d]++;
+            S.stat.rwDone++;
+            var th3 = S.threads.find(function (x) { return x.id === p.tid; });
+            if (th3) th3.rwDone++;
+          }
+        }
+        // 9) 线程结束：done 满且读写全完成 → 释放
+        for (var ti = S.threads.length - 1; ti &gt;= 0; ti--) {
+          var tt = S.threads[ti];
+          if (tt.done &gt;= tt.need &amp;&amp; tt.rwDone &gt;= tt.rwNeed) {
+            S.threads.splice(ti, 1);
+            S.stat.done++;
+          }
+        }
+      }
+
+      // ---------- 渲染 ----------
+      function chip(kind, label) { var d = document.createElement(&quot;span&quot;); d.className = &quot;chip &quot; + kind; d.textContent = label; return d; }
+
+      function render() {
+        var pipe = document.querySelectorAll(&quot;#flowConc .stage&quot;);
+        pipe.forEach(function (el) { el.classList.remove(&quot;blocked&quot;); });
+        var tok = document.querySelectorAll(&quot;#flowConc .stage .tokens&quot;);
+        tok.forEach(function (el) { el.innerHTML = &quot;&quot;; });
+        tok[1].appendChild(chip(&quot;ko&quot;, &quot;指令 ×&quot; + S.entryQ.length));
+        if (S.out) { tok[2].appendChild(chip(&quot;ko&quot;, &quot;交接中 1 条&quot;)); pipe[2].classList.toggle(&quot;blocked&quot;, S.outBp); }
+        tok[3].appendChild(chip(&quot;th&quot;, &quot;缓存 ×&quot; + S.bufQ.length));
+        tok[3].appendChild(chip(&quot;th&quot;, &quot;线程 ×&quot; + S.threads.length));
+        if (S.last.bufIn) tok[3].appendChild(chip(&quot;ko&quot;, &quot;入缓存 ↑&quot;));
+        if (S.last.bufOut) tok[3].appendChild(chip(&quot;th&quot;, &quot;放行建线程 ↑&quot;));
+        var l1block = S.threads.some(function (t) { return t.state === &quot;READY&quot; &amp;&amp; t.idx &lt; t.need; }) &amp;&amp;
+          ((S.q0.length &gt;= CAP.q0 &amp;&amp; S.q1.length &gt;= CAP.q1) || S.ct.length &gt;= CAP.ct);
+        pipe[4].classList.toggle(&quot;blocked&quot;, l1block);
+        if (S.last.iv) tok[4].appendChild(chip(&quot;iv&quot;, &quot;i/v ↑&quot; + S.last.iv));
+        if (S.last.c) tok[4].appendChild(chip(&quot;c&quot;, &quot;c ↑&quot; + S.last.c));
+        if (l1block) tok[4].appendChild(chip(&quot;drop&quot;, &quot;堵：&quot; + ((S.q0.length &gt;= CAP.q0 &amp;&amp; S.q1.length &gt;= CAP.q1) ? &quot;q满&quot; : &quot;ct满&quot;)));
+        var l2block = S.fifo.some(function (f) { return f.length &gt;= 8; });
+        pipe[5].classList.toggle(&quot;blocked&quot;, l2block);
+        for (var dch = 0; dch &lt; 4; dch++) if (S.last.dse[dch]) tok[5].appendChild(chip(&quot;c&quot;, &quot;DSE&quot; + dch + &quot; ↑&quot;));
+        if (S.last.eu[0]) tok[5].appendChild(chip(&quot;iv&quot;, &quot;EU0 执行中&quot;));
+        if (S.last.eu[1]) tok[5].appendChild(chip(&quot;iv&quot;, &quot;EU1 执行中&quot;));
+        var rbablock = S.fifo.some(function (f, i) { return f.length &gt; 0 &amp;&amp; S.cred[i] === 0; });
+        pipe[6].classList.toggle(&quot;blocked&quot;, rbablock);
+        for (var dch2 = 0; dch2 &lt; 4; dch2++) {
+          if (S.last.deq[dch2]) tok[6].appendChild(chip(&quot;c&quot;, &quot;出队 ↑&quot;));
+          var pd = S.pend.filter(function (p) { return p.d === dch2; });
+          if (pd.length) {
+            var nr = pd.filter(function (x) { return x.rw === 1; }).length;
+            var nw = pd.length - nr;
+            var minT = Math.min.apply(null, pd.map(function (x) { return x.t - S.tick; }));
+            tok[6].appendChild(chip(&quot;task&quot;, &quot;DSE&quot; + dch2 + &quot; 读&quot; + nr + &quot;写&quot; + nw + &quot; 剩&quot; + minT + &quot;拍&quot;));
+          }
+        }
+        if (S.stat.drop &gt; 0) tok[1].appendChild(chip(&quot;drop&quot;, &quot;丢弃 ×&quot; + S.stat.drop));
+
+        var st = S.stat;
+        var waitN = S.threads.filter(function (t) { return t.done &gt;= t.need &amp;&amp; t.rwDone &lt; t.rwNeed; }).length;
+        var t = Math.max(1, S.tick);
+        var util = {
+          &quot;一级(2/拍)&quot;: st.issT / t / 2,
+          &quot;EU(2/拍)&quot;: st.euT / t / 2,
+          &quot;DSE(4/拍)&quot;: st.dseT / t / 4,
+          &quot;出队+信用(4/拍)&quot;: st.deqT / t / 4,
+          &quot;THM建线程(1/拍)&quot;: st.create / t
+        };
+        var bn = &quot;未饱和&quot;, bnV = 0;
+        [&quot;一级(2/拍)&quot;, &quot;EU(2/拍)&quot;, &quot;DSE(4/拍)&quot;, &quot;出队+信用(4/拍)&quot;].forEach(function (kk) {
+          if (util[kk] &gt; bnV) { bnV = util[kk]; bn = kk; }
+        });
+        var pct = function (v) { return Math.round(100 * v) + &quot;%&quot;; };
+        document.getElementById(&quot;fcStats&quot;).innerHTML =
+          &quot;注入 &lt;b&gt;&quot; + st.inj + &quot;&lt;/b&gt;　丢弃 &lt;b&gt;&quot; + st.drop + &quot;&lt;/b&gt;　建线程 &lt;b&gt;&quot; + st.create + &quot;&lt;/b&gt;　完成 &lt;b&gt;&quot; + st.done + &quot;&lt;/b&gt;&quot; +
+          &quot;　一级 i/v &lt;b&gt;&quot; + st.issIv + &quot;&lt;/b&gt; / c &lt;b&gt;&quot; + st.issC + &quot;&lt;/b&gt;　DSE &lt;b&gt;&quot; + st.dse + &quot;&lt;/b&gt;　出队 &lt;b&gt;&quot; + st.deq + &quot;&lt;/b&gt;&quot; +
+          &quot;　在途读写 &lt;b&gt;&quot; + S.pend.length + &quot;&lt;/b&gt;　等读写线程 &lt;b&gt;&quot; + waitN + &quot;&lt;/b&gt;　反压拍 &lt;b&gt;&quot; + st.bp + &quot;&lt;/b&gt;&lt;br&gt;&quot; +
+          &quot;利用率：一级 &quot; + pct(util[&quot;一级(2/拍)&quot;]) + &quot; · EU &quot; + pct(util[&quot;EU(2/拍)&quot;]) + &quot; · DSE &quot; + pct(util[&quot;DSE(4/拍)&quot;]) +
+          &quot; · 出队/信用 &quot; + pct(util[&quot;出队+信用(4/拍)&quot;]) + &quot; · 建线程 &quot; + pct(util[&quot;THM建线程(1/拍)&quot;]) +
+          &quot;　&lt;b&gt;瓶颈：&quot; + bn + (bn === &quot;未饱和&quot; ? &quot;&quot; : &quot;（&quot; + pct(bnV) + &quot;）&quot;) + &quot;&lt;/b&gt;&lt;br&gt;&quot; +
+          &quot;流注入：OH_EXT &quot; + st.perStream[0] + &quot; · OH_INS &quot; + st.perStream[1] + &quot; · APS_EXT &quot; + st.perStream[2] +
+          &quot; · APS_INS &quot; + st.perStream[3] + &quot; · ALM &quot; + st.perStream[4] + &quot; · UART_E &quot; + st.perStream[5] + &quot; · UART_I &quot; + st.perStream[6];
+
+        var tb = document.getElementById(&quot;fcThreads&quot;);
+        if (!S.threads.length) { tb.innerHTML = &#x27;&lt;div class=&quot;subnote&quot;&gt;（暂无活跃线程：调大注入倍率即可看到线程池被占满）&lt;/div&gt;&#x27;; }
+        else {
+          var rows = S.threads.slice(0, 8).map(function (t) {
+            var waiting = t.done &gt;= t.need &amp;&amp; t.rwDone &lt; t.rwNeed;
+            var stTxt = waiting
+              ? &#x27;&lt;span style=&quot;color:var(--destructive)&quot;&gt;等读写(剩&#x27; + (t.rwNeed - t.rwDone) + &#x27;)&lt;/span&gt;&#x27;
+              : (t.state + (t.cool &gt; 0 ? &quot;(&quot; + t.cool + &quot;)&quot; : &quot;&quot;));
+            var pctD = t.need ? Math.round(100 * t.done / t.need) : 0;
+            var pctR = t.rwNeed ? Math.round(100 * t.rwDone / t.rwNeed) : 100;
+            return &quot;&lt;tr&gt;&lt;td&gt;#&quot; + t.id + &quot; &quot; + SRC[t.s].name + &quot;-&quot; + t.plane + &quot; pri&quot; + t.pri + &quot;&lt;/td&gt;&quot; +
+              &quot;&lt;td&gt;&quot; + stTxt + &quot;&lt;/td&gt;&quot; +
+              &quot;&lt;td&gt;发 &quot; + t.idx + &quot;/&quot; + t.need + &quot;&lt;/td&gt;&quot; +
+              &quot;&lt;td&gt;完 &quot; + t.done + &quot; (&quot; + pctD + &quot;%)&lt;/td&gt;&quot; +
+              &quot;&lt;td&gt;rw &quot; + t.rwDone + &quot;/&quot; + t.rwNeed + &quot; (&quot; + pctR + &quot;%)&quot; + (t.isL1 ? &quot; L1&quot; : &quot; SMC&quot;) + &quot;&lt;/td&gt;&lt;/tr&gt;&quot;;
+          }).join(&quot;&quot;);
+          var more = S.threads.length &gt; 8 ? &quot;&lt;tr&gt;&lt;td colspan=&#x27;5&#x27; class=&#x27;subnote&#x27;&gt;… 还有 &quot; + (S.threads.length - 8) + &quot; 个（显示最早创建的一批）&lt;/td&gt;&lt;/tr&gt;&quot; : &quot;&quot;;
+          tb.innerHTML = &quot;&lt;table&gt;&lt;tr&gt;&lt;th&gt;线程&lt;/th&gt;&lt;th&gt;状态&lt;/th&gt;&lt;th&gt;发射&lt;/th&gt;&lt;th&gt;完成&lt;/th&gt;&lt;th&gt;读写&lt;/th&gt;&lt;/tr&gt;&quot; + rows + more + &quot;&lt;/table&gt;&quot;;
+        }
+
+        var caps = { q0: S.q0.length, q1: S.q1.length, ct: S.ct.length, f0: S.fifo[0].length, f1: S.fifo[1].length, f2: S.fifo[2].length, f3: S.fifo[3].length };
+        for (var b in CAP) {
+          if (caps[b] &gt; S.peak[b]) S.peak[b] = caps[b];
+          var ce = document.getElementById(&quot;fcCap&quot; + b.toUpperCase());
+          if (ce) ce.textContent = caps[b] + &quot;/&quot; + CAP[b] + &quot; 峰&quot; + S.peak[b];
+          var box = document.querySelector(&#x27;#flowConc [data-b=&quot;&#x27; + b + &#x27;&quot;]&#x27;);
+          box.classList.toggle(&quot;full&quot;, caps[b] &gt;= CAP[b]);
+          var cells = box.querySelector(&quot;.cells&quot;);
+          cells.innerHTML = &quot;&quot;;
+          for (var k = 0; k &lt; CAP[b]; k++) {
+            var c = document.createElement(&quot;span&quot;);
+            c.className = &quot;cell&quot; + (k &lt; caps[b] ? &quot; on&quot; : &quot;&quot;);
+            if (caps[b] &gt;= CAP[b]) c.className += &quot; full&quot;;
+            cells.appendChild(c);
+          }
+        }
+        for (var d = 0; d &lt; 4; d++) {
+          var box2 = document.querySelector(&#x27;#flowConc [data-b=&quot;f&#x27; + d + &#x27;&quot;]&#x27;);
+          var rb = box2.querySelector(&quot;.rba&quot;);
+          rb.classList.toggle(&quot;low&quot;, S.cred[d] &lt;= 16);
+          rb.querySelector(&quot;i&quot;).style.width = (100 * S.cred[d] / 64) + &quot;%&quot;;
+          var re = document.getElementById(&quot;fcRba&quot; + d);
+          if (re) re.textContent = S.cred[d];
+          var pe = document.getElementById(&quot;fcPend&quot; + d);
+          if (pe) pe.textContent = &quot;在途&quot; + S.pend.filter(function (p) { return p.d === d; }).length;
+        }
+        var le = document.getElementById(&quot;fcLog&quot;);
+        if (le) le.textContent = S.log.join(&quot;\n&quot;);
+        var rve = document.getElementById(&quot;fcRateV&quot;);
+        if (rve) rve.textContent = &quot;×&quot; + S.rate;
+        var sve = document.getElementById(&quot;fcSpeedV&quot;);
+        if (sve) sve.textContent = S.speed + &quot;拍/s&quot;;
+        var pbe = document.getElementById(&quot;fcPlay&quot;);
+        if (pbe) pbe.textContent = playing ? &quot;⏸ 暂停（点此停止）&quot; : &quot;▶ 播放（点此开始）&quot;;
+      }
+
+      function doTick() { tick(); render(); }
+
+      function play() {
+        if (playing) return;
+        playing = true;
+        timer = setInterval(function () { doTick(); }, Math.max(10, Math.round(1000 / S.speed)));
+        render();
+      }
+      function pause() {
+        playing = false;
+        if (timer) { clearInterval(timer); timer = null; }
+        render();
+      }
+
+      S = init();
+      document.getElementById(&quot;fcRate&quot;).addEventListener(&quot;input&quot;, function (e) { S.rate = +e.target.value; render(); });
+      document.getElementById(&quot;fcSpeed&quot;).addEventListener(&quot;input&quot;, function (e) {
+        S.speed = +e.target.value;
+        if (playing) { clearInterval(timer); timer = setInterval(function () { doTick(); }, Math.max(10, Math.round(1000 / S.speed))); }
+        render();
+      });
+      document.getElementById(&quot;fcPlay&quot;).addEventListener(&quot;click&quot;, function () { playing ? pause() : play(); });
+      document.getElementById(&quot;fcStep&quot;).addEventListener(&quot;click&quot;, function () {
+        pause(); doTick(); pushLog(&quot;单步：已走到 t&quot; + S.tick); render();
+      });
+      document.getElementById(&quot;fcReset&quot;).addEventListener(&quot;click&quot;, function () { pause(); S = init(); render(); });
+      render();
+    })();
+  &lt;/script&gt;
+&lt;/div&gt;
+
+&lt;script src=&quot;https://unpkg.com/@floating-ui/core@1.7.3/dist/floating-ui.core.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script src=&quot;https://unpkg.com/@floating-ui/dom@1.7.4/dist/floating-ui.dom.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  if (window.FloatingUIDOM == null) {
+    return;
+  }
+  const { autoUpdate, computePosition, flip, offset, shift, size } =
+    window.FloatingUIDOM;
+  const tooltipPlacements = new Set([&quot;top&quot;, &quot;right&quot;, &quot;bottom&quot;, &quot;left&quot;]);
+  const tooltipId = `codex-visualization-tooltip-${
+    window.crypto?.randomUUID?.() ?? Date.now().toString(36)
+  }`;
+  const tooltipGap = 5;
+  const hoverDelay = 700;
+  const skipDelay = 300;
+  let activeTrigger = null;
+  let pendingTrigger = null;
+  let tooltip = null;
+  let openTimeout = null;
+  let autoUpdateCleanup = null;
+  let positionRequest = 0;
+  let skipDelayUntil = 0;
+
+  const getTrigger = (target) =&gt;
+    target?.nodeType === Node.ELEMENT_NODE
+      ? target.closest(&quot;[data-tooltip]&quot;)
+      : null;
+  const containsTarget = (trigger, target) =&gt;
+    target?.nodeType != null &amp;&amp; trigger.contains(target);
+  const getContent = (trigger) =&gt;
+    trigger.getAttribute(&quot;data-tooltip&quot;)?.trim() ?? &quot;&quot;;
+  const getPlacement = (trigger) =&gt; {
+    const placement = trigger.getAttribute(&quot;data-tooltip-placement&quot;);
+    return tooltipPlacements.has(placement) ? placement : &quot;top&quot;;
+  };
+  const getTooltip = () =&gt; {
+    if (tooltip == null) {
+      tooltip = document.createElement(&quot;div&quot;);
+      tooltip.id = tooltipId;
+      tooltip.className = &quot;tooltip&quot;;
+      tooltip.setAttribute(&quot;role&quot;, &quot;tooltip&quot;);
+    }
+    return tooltip;
+  };
+  const setDescribedBy = (trigger, described) =&gt; {
+    const ids = new Set(
+      (trigger.getAttribute(&quot;aria-describedby&quot;) ?? &quot;&quot;)
+        .split(/\s+/)
+        .filter(Boolean),
+    );
+    if (described) {
+      ids.add(tooltipId);
+    } else {
+      ids.delete(tooltipId);
+    }
+    if (ids.size === 0) {
+      trigger.removeAttribute(&quot;aria-describedby&quot;);
+    } else {
+      trigger.setAttribute(&quot;aria-describedby&quot;, [...ids].join(&quot; &quot;));
+    }
+  };
+  const clearOpenTimeout = () =&gt; {
+    if (openTimeout != null) {
+      window.clearTimeout(openTimeout);
+      openTimeout = null;
+    }
+    pendingTrigger = null;
+  };
+  const closeTooltip = (activateSkipDelay = true) =&gt; {
+    clearOpenTimeout();
+    positionRequest += 1;
+    autoUpdateCleanup?.();
+    autoUpdateCleanup = null;
+    if (activeTrigger == null) {
+      return;
+    }
+    setDescribedBy(activeTrigger, false);
+    activeTrigger = null;
+    tooltip?.remove();
+    if (activateSkipDelay) {
+      skipDelayUntil = Date.now() + skipDelay;
+    }
+  };
+  const updatePosition = (trigger, floating) =&gt; {
+    const request = ++positionRequest;
+    void computePosition(trigger, floating, {
+      middleware: [
+        offset(tooltipGap),
+        flip({ padding: tooltipGap }),
+        shift({ padding: tooltipGap }),
+        size({
+          padding: tooltipGap,
+          apply({ availableHeight, availableWidth, elements }) {
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-width&quot;,
+              `${Math.max(0, availableWidth)}px`,
+            );
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-height&quot;,
+              `${Math.max(0, availableHeight)}px`,
+            );
+          },
+        }),
+      ],
+      placement: getPlacement(trigger),
+      strategy: &quot;fixed&quot;,
+    })
+      .then(({ x, y }) =&gt; {
+        if (activeTrigger !== trigger || request !== positionRequest) {
+          return;
+        }
+        const scale = window.devicePixelRatio || 1;
+        floating.style.transform = `translate(${Math.round(x * scale) / scale}px, ${Math.round(y * scale) / scale}px)`;
+        floating.style.visibility = &quot;visible&quot;;
+      })
+      .catch(() =&gt; {
+        if (activeTrigger === trigger &amp;&amp; request === positionRequest) {
+          closeTooltip(false);
+        }
+      });
+  };
+  const openTooltip = (trigger) =&gt; {
+    const content = getContent(trigger);
+    if (!trigger.isConnected || content.length === 0) {
+      return;
+    }
+    clearOpenTimeout();
+    if (activeTrigger === trigger) {
+      return;
+    }
+    closeTooltip();
+    const floating = getTooltip();
+    floating.textContent = content;
+    floating.style.visibility = &quot;hidden&quot;;
+    floating.style.transform = &quot;translate(0, 0)&quot;;
+    document.body.appendChild(floating);
+    activeTrigger = trigger;
+    setDescribedBy(trigger, true);
+    autoUpdateCleanup = autoUpdate(trigger, floating, () =&gt; {
+      updatePosition(trigger, floating);
+    });
+  };
+  const requestOpen = (trigger, immediate = false) =&gt; {
+    if (
+      getContent(trigger).length === 0 ||
+      activeTrigger === trigger ||
+      pendingTrigger === trigger
+    ) {
+      return;
+    }
+    clearOpenTimeout();
+    pendingTrigger = trigger;
+    const delay =
+      immediate || activeTrigger != null || Date.now() &lt; skipDelayUntil
+        ? 0
+        : hoverDelay;
+    if (delay === 0) {
+      openTooltip(trigger);
+      return;
+    }
+    openTimeout = window.setTimeout(() =&gt; {
+      openTimeout = null;
+      pendingTrigger = null;
+      openTooltip(trigger);
+    }, delay);
+  };
+  const handlePointerOpen = (event) =&gt; {
+    if (event.pointerType === &quot;touch&quot;) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    requestOpen(trigger);
+  };
+  const handleLeave = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handleFocusIn = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger?.matches(&quot;:focus-visible&quot;)) {
+      requestOpen(trigger, true);
+    }
+  };
+  const handleKeyDown = (event) =&gt; {
+    if (event.key === &quot;Escape&quot;) {
+      closeTooltip();
+    }
+  };
+  const handleContextMenu = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const destroy = () =&gt; {
+    closeTooltip(false);
+    document.removeEventListener(&quot;pointerover&quot;, handlePointerOpen);
+    document.removeEventListener(&quot;pointerout&quot;, handleLeave);
+    document.removeEventListener(&quot;focusin&quot;, handleFocusIn);
+    document.removeEventListener(&quot;focusout&quot;, handleLeave);
+    document.removeEventListener(&quot;keydown&quot;, handleKeyDown);
+    document.removeEventListener(&quot;contextmenu&quot;, handleContextMenu);
+    tooltip = null;
+  };
+
+  document.addEventListener(&quot;pointerover&quot;, handlePointerOpen);
+  document.addEventListener(&quot;pointerout&quot;, handleLeave);
+  document.addEventListener(&quot;focusin&quot;, handleFocusIn);
+  document.addEventListener(&quot;focusout&quot;, handleLeave);
+  document.addEventListener(&quot;keydown&quot;, handleKeyDown);
+  document.addEventListener(&quot;contextmenu&quot;, handleContextMenu);
+  window.addEventListener(&quot;pagehide&quot;, destroy, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-lucide&quot; async src=&quot;https://unpkg.com/lucide@1.17.0/dist/umd/lucide.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  const initialize = () =&gt; {
+    globalThis.lucide?.createIcons({ attrs: { width: 16, height: 16 } });
+  };
+  if (globalThis.lucide != null) {
+    initialize();
+    return;
+  }
+  document
+    .getElementById(&quot;codex-visualization-lucide&quot;)
+    ?.addEventListener(&quot;load&quot;, initialize, { once: true });
+})();
+&lt;/script&gt;
+
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+</body>
+</html>
