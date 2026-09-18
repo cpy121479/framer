@@ -1,0 +1,86 @@
+{
+  "schema": "sa.v1",
+  "core": {
+    "name": "rv32i",
+    "input_banking": true,
+    "tid_width": 8,
+    "imem_depth": 16,
+    "isa_group": "基础整数"
+  },
+  "regs": {
+    "bytes": 128,
+    "data_width": 32
+  },
+  "alu_types": [
+    {
+      "name": "ialu_r",
+      "description": "R 型整数运算",
+      "ops": [
+        "ADD",
+        "SUB",
+        "SLL"
+      ]
+    },
+    {
+      "name": "ialu_iu",
+      "description": "I/U 型立即数（含 AUIPC 随路 PC）",
+      "ops": [
+        "ADDI",
+        "LUI",
+        "AUIPC"
+      ]
+    },
+    {
+      "name": "store",
+      "description": "加法 + Store 桩（S 型无 dst）",
+      "ops": [
+        "ADD",
+        "SW"
+      ]
+    },
+    {
+      "name": "csr",
+      "description": "mstatus RMW / mcycle 读",
+      "ops": [
+        "CSRRW",
+        "CSRR"
+      ]
+    }
+  ],
+  "stages": [
+    {
+      "name": "s0",
+      "window": {
+        "lo": 0,
+        "hi": 63
+      },
+      "alus": [
+        {
+          "name": "p0",
+          "type": "ialu_r"
+        },
+        {
+          "name": "p1",
+          "type": "ialu_iu"
+        }
+      ]
+    },
+    {
+      "name": "s1",
+      "window": {
+        "lo": 32,
+        "hi": 127
+      },
+      "alus": [
+        {
+          "name": "p0",
+          "type": "store"
+        },
+        {
+          "name": "p1",
+          "type": "csr"
+        }
+      ]
+    }
+  ]
+}

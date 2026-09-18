@@ -1,0 +1,4 @@
+# 仿真构建产物（只忽略产物；RTL/TB/UVM/脚本照常提交）
+# 根目录 .gitignore 已覆盖 obj_verilator/、*.o、*.d、*.gch、*.log、simv.exe，
+# 这里补上新增的两个构建目录，避免把上百 MB 的生成代码提交上去。
+sim/obj_*/

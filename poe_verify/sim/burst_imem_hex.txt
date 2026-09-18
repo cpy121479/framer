@@ -1,0 +1,13 @@
+// burst 指令存储镜像（由 rtl/poe_burst_imem.sv 内部 initial 生成，等价内容）
+// 29bit burst 字段: [28]bt [27]st | st=1时[26]lk [25]br [24:17]tsk_msk | [16]tr [15:14]vld_cu [13:11]tsk_id0 [10:8]tsk_id1 [7:0]sub_pc
+// ts 行 256bit: [255:237]预留 [236]is_last [235:232]n_burst [231:0] 8 x 29bit burst (burst[0] 在最低)
+
+== 每条 burst（29bit，8 位十六进制）==
+ts0 burst0 = 0x09FE4100
+ts0 burst1 = 0x00005301
+ts1 burst0 = 0x0BFE6502
+ts1 burst1 = 0x00007703
+
+== 每个 ts 行（256bit，64 位十六进制，可直接喂 $readmemh）==
+ts0 row     = 0x00000200000000000000000000000000000000000000000000000A6029FE4100
+ts1 row     = 0x00001200000000000000000000000000000000000000000000000EE06BFE6502

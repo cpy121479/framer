@@ -1,0 +1,622 @@
+{
+  "schema": "isa.v1",
+  "isa": {
+    "name": "示例混合指令集",
+    "version": "0.1",
+    "lengthModes": [
+      16,
+      32
+    ],
+    "description": "RV32I 子集 + 16 位压缩指令 + DSP 子指令示例，用于验证 isa-studio 全流程",
+    "groups": [
+      {
+        "name": "基础整数",
+        "lengthModes": [
+          32
+        ],
+        "description": "基础整数指令组：寄存器运算、访存、跳转与系统指令"
+      },
+      {
+        "name": "压缩指令",
+        "lengthModes": [
+          16
+        ],
+        "description": "16 位压缩编码指令组"
+      },
+      {
+        "name": "DSP 扩展",
+        "lengthModes": [
+          32
+        ],
+        "description": "数字信号处理扩展：乘加及其子功能"
+      }
+    ]
+  },
+  "fields": [
+    {
+      "name": "opcode",
+      "type": "ctrl",
+      "bits": 7,
+      "description": "主操作码，固定于指令最低 7 位，区分指令类别"
+    },
+    {
+      "name": "funct3",
+      "type": "ctrl",
+      "bits": 3,
+      "description": "3 位辅助功能码，区分同主操作码下的不同操作"
+    },
+    {
+      "name": "funct7",
+      "type": "ctrl",
+      "bits": 7,
+      "description": "7 位辅助功能码，R 型指令高位功能区分"
+    },
+    {
+      "name": "funct4",
+      "type": "ctrl",
+      "bits": 4,
+      "description": "压缩指令 4 位功能码"
+    },
+    {
+      "name": "funct8",
+      "type": "ctrl",
+      "bits": 8,
+      "description": "DSP 扩展 8 位功能码"
+    },
+    {
+      "name": "zero",
+      "type": "reserved",
+      "bits": 12,
+      "description": "保留位，恒为 0（wavedrom 中灰色显示），软件不应依赖其取值"
+    },
+    {
+      "name": "op",
+      "type": "ctrl",
+      "bits": 2,
+      "description": "压缩指令 2 位限定符，C.ADD 中固定为 11"
+    },
+    {
+      "name": "mode",
+      "type": "ctrl",
+      "bits": 2,
+      "description": "DSP 子域段，选择乘加子功能（00 饱和 / 01 舍入）"
+    },
+    {
+      "name": "dst",
+      "type": "reg",
+      "bits": 5,
+      "description": "目的寄存器号（纯写：结果写入 x[dst]）"
+    },
+    {
+      "name": "rs1",
+      "type": "reg",
+      "bits": 5,
+      "description": "第一源寄存器号，读取 x[rs1]"
+    },
+    {
+      "name": "rs2",
+      "type": "reg",
+      "bits": 5,
+      "description": "第二源寄存器号，读取 x[rs2]"
+    },
+    {
+      "name": "src/dst",
+      "type": "reg",
+      "bits": 5,
+      "description": "压缩指令读改写寄存器号（src/dst：既读又写）"
+    },
+    {
+      "name": "imm[31:12]",
+      "type": "imm",
+      "bits": 20,
+      "description": "U 型高位立即数，低 12 位补零"
+    },
+    {
+      "name": "imm[11:0]",
+      "type": "imm",
+      "bits": 12,
+      "description": "I 型符号扩展立即数"
+    },
+    {
+      "name": "imm[11:5]",
+      "type": "imm",
+      "bits": 7,
+      "description": "S 型立即数高位（imm[11:5]）"
+    },
+    {
+      "name": "imm[4:0]",
+      "type": "imm",
+      "bits": 5,
+      "description": "S 型立即数低位（imm[4:0]）"
+    },
+    {
+      "name": "imm[12|10:5]",
+      "type": "imm",
+      "bits": 7,
+      "description": "B 型分支偏移高位（散列编码）"
+    },
+    {
+      "name": "imm[4:1|11]",
+      "type": "imm",
+      "bits": 5,
+      "description": "B 型分支偏移低位（散列编码）"
+    },
+    {
+      "name": "imm[20|10:1|11|19:12]",
+      "type": "imm",
+      "bits": 20,
+      "description": "J 型跳转偏移（散列编码）"
+    },
+    {
+      "name": "src1/dst",
+      "type": "reg",
+      "bits": 5,
+      "description": "DSP 读改写目的寄存器号（src1/dst：既读又写）"
+    }
+  ],
+  "enums": {
+    "mode": {
+      "SAT": {
+        "value": "00",
+        "description": "饱和模式乘加（XMAC.SAT）"
+      },
+      "RND": {
+        "value": "01",
+        "description": "舍入模式乘加（XMAC.RND）"
+      }
+    },
+    "op": {
+      "Q0": {
+        "value": "00",
+        "description": "压缩加载/存储分组"
+      },
+      "Q1": {
+        "value": "01",
+        "description": "压缩算术分组"
+      },
+      "Q2": {
+        "value": "10",
+        "description": "压缩控制流分组"
+      },
+      "Q3": {
+        "value": "11",
+        "description": "寄存器基组（C.ADD 等 CR 格式）"
+      }
+    }
+  },
+  "csr": [
+    {
+      "name": "mstatus",
+      "address": "0x300",
+      "bits": 32,
+      "type": "rw",
+      "description": "机器模式状态寄存器（全局中断使能等）"
+    },
+    {
+      "name": "mtvec",
+      "address": "0x305",
+      "bits": 32,
+      "type": "rw",
+      "description": "机器模式陷阱向量基址"
+    },
+    {
+      "name": "mepc",
+      "address": "0x341",
+      "bits": 32,
+      "type": "rw",
+      "description": "陷阱返回 PC"
+    },
+    {
+      "name": "mcause",
+      "address": "0x342",
+      "bits": 32,
+      "type": "rw",
+      "description": "陷阱原因（中断/异常编号）"
+    },
+    {
+      "name": "mcycle",
+      "address": "0xB00",
+      "bits": 32,
+      "type": "ro",
+      "description": "周期计数器（只读）"
+    },
+    {
+      "name": "minstret",
+      "address": "0xB02",
+      "bits": 32,
+      "type": "ro",
+      "description": "退休指令计数器（只读）"
+    },
+    {
+      "name": "dbgcmd",
+      "address": "0x9C0",
+      "bits": 32,
+      "type": "wo",
+      "description": "调试命令口（只写，读值无意义）"
+    }
+  ],
+  "builtins": [
+    {
+      "name": "sext",
+      "args": [
+        {
+          "name": "v",
+          "bits": 32
+        },
+        {
+          "name": "w",
+          "type": "int"
+        }
+      ],
+      "description": "符号扩展：低 w 位按符号扩展到 XLEN",
+      "semantics": "logic [XLEN-1:0] m;\ninteger i;\nm = {XLEN{1'b0}};\nfor (i = 0; i < w; i = i + 1) m[i] = 1'b1;\nresult = (v & m) | (v[w-1] ? ~m : {XLEN{1'b0}});"
+    },
+    {
+      "name": "satadd",
+      "args": [
+        {
+          "name": "a",
+          "bits": 32
+        },
+        {
+          "name": "b",
+          "bits": 32
+        }
+      ],
+      "description": "饱和加法：无符号上溢时饱和到最大值",
+      "semantics": "logic [XLEN-1:0] s = a + b;\nresult = (s < a) ? {XLEN{1'b1}} : s; // s < a 即发生上溢"
+    },
+    {
+      "name": "neg",
+      "args": [
+        {
+          "name": "v",
+          "bits": 32
+        }
+      ],
+      "ret": {
+        "type": "bool"
+      },
+      "description": "最高位是否为 1（有符号数为负）",
+      "semantics": "result = v[XLEN-1];"
+    },
+    {
+      "name": "clz",
+      "args": [
+        {
+          "name": "v",
+          "bits": 32
+        }
+      ],
+      "ret": {
+        "type": "int"
+      },
+      "description": "前导零计数（返回 int）",
+      "semantics": "integer i;\nlogic done;\ndone = 1'b0;\nresult = 0;\nfor (i = XLEN-1; i >= 0; i = i - 1) begin\n  if (!done) begin\n    if (v[i]) done = 1'b1;\n    else result = result + 1;\n  end\nend"
+    }
+  ],
+  "formats": [
+    {
+      "name": "CR",
+      "length": 16,
+      "fields": [
+        "op",
+        "src/dst",
+        "rs2",
+        "funct4"
+      ],
+      "group": "压缩指令"
+    },
+    {
+      "name": "U",
+      "length": 32,
+      "fields": [
+        "opcode",
+        "dst",
+        "imm[31:12]"
+      ],
+      "group": "基础整数"
+    },
+    {
+      "name": "J",
+      "length": 32,
+      "fields": [
+        "opcode",
+        "dst",
+        "imm[20|10:1|11|19:12]"
+      ],
+      "group": "基础整数"
+    },
+    {
+      "name": "I",
+      "length": 32,
+      "fields": [
+        "opcode",
+        "dst",
+        "funct3",
+        "rs1",
+        "imm[11:0]"
+      ],
+      "group": "基础整数"
+    },
+    {
+      "name": "I0",
+      "length": 32,
+      "fields": [
+        "opcode",
+        "dst",
+        "funct3",
+        "rs1",
+        "zero"
+      ],
+      "group": "基础整数"
+    },
+    {
+      "name": "R",
+      "length": 32,
+      "fields": [
+        "opcode",
+        "dst",
+        "funct3",
+        "rs1",
+        "rs2",
+        "funct7"
+      ],
+      "group": "基础整数"
+    },
+    {
+      "name": "S",
+      "length": 32,
+      "fields": [
+        "opcode",
+        "imm[4:0]",
+        "funct3",
+        "rs1",
+        "rs2",
+        "imm[11:5]"
+      ],
+      "group": "基础整数"
+    },
+    {
+      "name": "B",
+      "length": 32,
+      "fields": [
+        "opcode",
+        "imm[4:1|11]",
+        "funct3",
+        "rs1",
+        "rs2",
+        "imm[12|10:5]"
+      ],
+      "group": "基础整数"
+    },
+    {
+      "name": "X",
+      "length": 32,
+      "fields": [
+        "opcode",
+        "src1/dst",
+        "mode",
+        "rs1",
+        "rs2",
+        "funct8"
+      ],
+      "group": "DSP 扩展"
+    }
+  ],
+  "instructions": [
+    {
+      "name": "LUI",
+      "format": "U",
+      "syntax": "lui dst, imm",
+      "encoding": {
+        "opcode": "0110111"
+      },
+      "description": "将立即数装载到 dst 高 20 位，低 12 位清零",
+      "semantics": "dst = {f.imm_31_12, 12'b0};"
+    },
+    {
+      "name": "AUIPC",
+      "format": "U",
+      "syntax": "auipc dst, imm",
+      "encoding": {
+        "opcode": "0010111"
+      },
+      "description": "rd = pc + 高 20 位立即数",
+      "semantics": "dst = pc + {f.imm_31_12, 12'b0};"
+    },
+    {
+      "name": "JAL",
+      "format": "J",
+      "syntax": "jal dst, offset",
+      "encoding": {
+        "opcode": "1101111"
+      },
+      "description": "无条件跳转并链接，返回地址写入 rd",
+      "semantics": "dst = pc + 32'd4; // 返回链接；跳转目标 = pc + J 型散列立即数（f.imm_20_10_1_11_19_12 需重排）"
+    },
+    {
+      "name": "JALR",
+      "format": "I",
+      "syntax": "jalr dst, offset(rs1)",
+      "encoding": {
+        "funct3": "000",
+        "opcode": "1100111"
+      },
+      "description": "寄存器间接跳转并链接",
+      "semantics": "dst = pc + 32'd4; // 跳转目标 = (rs1 + isa_pkg::sext(f.imm_11_0, 12)) & ~1"
+    },
+    {
+      "name": "ADDI",
+      "format": "I",
+      "syntax": "addi dst, rs1, imm",
+      "encoding": {
+        "funct3": "000",
+        "opcode": "0010011"
+      },
+      "description": "寄存器加符号扩展立即数",
+      "semantics": "dst = rs1 + isa_pkg::sext(f.imm_11_0, 12);"
+    },
+    {
+      "name": "LW",
+      "format": "I",
+      "syntax": "lw dst, offset(rs1)",
+      "encoding": {
+        "funct3": "010",
+        "opcode": "0000011"
+      },
+      "description": "从内存加载 32 位字到 rd",
+      "semantics": "dst = rs1 + isa_pkg::sext(f.imm_11_0, 12); // Load 地址（数据经访存通道返回）"
+    },
+    {
+      "name": "ADD",
+      "format": "R",
+      "encoding": {
+        "funct7": "0000000",
+        "funct3": "000",
+        "opcode": "0110011"
+      },
+      "description": "寄存器加法",
+      "semantics": "dst = rs1 + rs2;"
+    },
+    {
+      "name": "SUB",
+      "format": "R",
+      "encoding": {
+        "funct7": "0100000",
+        "funct3": "000",
+        "opcode": "0110011"
+      },
+      "description": "寄存器减法",
+      "semantics": "dst = rs1 - rs2;"
+    },
+    {
+      "name": "SLL",
+      "format": "R",
+      "encoding": {
+        "funct7": "0000000",
+        "funct3": "001",
+        "opcode": "0110011"
+      },
+      "description": "逻辑左移",
+      "semantics": "dst = rs1 << rs2[4:0];"
+    },
+    {
+      "name": "SW",
+      "format": "S",
+      "syntax": "sw rs2, offset(rs1)",
+      "encoding": {
+        "funct3": "010",
+        "opcode": "0100011"
+      },
+      "description": "将 rs2 存入内存",
+      "semantics": "// Store：地址 = rs1 + {f.imm_11_5, f.imm_4_0}，写数据 = rs2（访存由调用方处理；本指令无 dst）"
+    },
+    {
+      "name": "BEQ",
+      "format": "B",
+      "syntax": "beq rs1, rs2, offset",
+      "encoding": {
+        "funct3": "000",
+        "opcode": "1100011"
+      },
+      "description": "相等则分支跳转",
+      "semantics": "// 相等则跳转：rs1 == rs2 时目标 = pc + isa_pkg::sext({f.imm_12_10_5, f.imm_4_1_11}, 12)（散列位序需手工重排；本指令无 dst）"
+    },
+    {
+      "name": "CSRRW",
+      "format": "I",
+      "syntax": "csrrw dst, csr, rs1",
+      "encoding": {
+        "funct3": "001",
+        "opcode": "1110011"
+      },
+      "description": "读旧值写入 rd，rs1 写入 CSR（示例访问 mstatus）",
+      "semantics": "dst = mstatus; // 旧值写入 dst\nmstatus_w = rs1;   // rs1 作为新值写回 CSR",
+      "csrread": [
+        "mstatus"
+      ],
+      "csrwrite": [
+        "mstatus"
+      ]
+    },
+    {
+      "name": "CSRR",
+      "format": "I",
+      "syntax": "csrr dst, csr",
+      "encoding": {
+        "funct3": "010",
+        "opcode": "1110011"
+      },
+      "description": "读只读 CSR 到 rd（示例读 mcycle）",
+      "semantics": "dst = mcycle; // 读取周期计数器",
+      "csrread": [
+        "mcycle"
+      ]
+    },
+    {
+      "name": "ECALL",
+      "format": "I0",
+      "syntax": "ecall",
+      "encoding": {
+        "zero": "000000000000",
+        "rs1": "00000",
+        "funct3": "000",
+        "opcode": "1110011",
+        "dst": "00000"
+      },
+      "description": "环境调用请求（真实保留字段示例：高 12 位 zero 恒为 0，灰色显示）",
+      "semantics": "// 触发环境调用异常（dst 保持 0）"
+    },
+    {
+      "name": "C.ADD",
+      "format": "CR",
+      "encoding": {
+        "funct4": "1001",
+        "op": "11"
+      },
+      "description": "16 位压缩加法",
+      "semantics": "dst = src_dst + rs2; // src/dst 读改写"
+    },
+    {
+      "name": "XMAC",
+      "format": "X",
+      "encoding": {
+        "funct8": "00001101",
+        "opcode": "1110110"
+      },
+      "description": "DSP 乘加，mode 子域段选择子功能",
+      "semantics": "dst = src1_dst + rs1 * rs2;",
+      "intrinsics": [
+        {
+          "signature": "v4i32 f(v4i32 acc, v4i32 a, v4i32 b)",
+          "description": "默认模式乘加"
+        }
+      ],
+      "subinstructions": [
+        {
+          "name": "SAT",
+          "encoding": {
+            "mode": "00"
+          },
+          "description": "饱和模式乘加",
+          "semantics": "// 饱和模式乘加：加法经内建函数 satadd 饱和\ndst = satadd(src1_dst, rs1 * rs2);",
+          "intrinsics": [
+            {
+              "signature": "v4i32 f(v4i32 acc, v4i32 a, v4i32 b)",
+              "description": "饱和模式乘加"
+            }
+          ]
+        },
+        {
+          "name": "RND",
+          "encoding": {
+            "mode": "01"
+          },
+          "description": "舍入模式乘加",
+          "semantics": "// 舍入模式乘加（示例从略舍入策略）\ndst = src1_dst + rs1 * rs2;"
+        }
+      ]
+    }
+  ]
+}

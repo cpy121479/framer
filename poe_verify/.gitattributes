@@ -1,0 +1,3 @@
+# 本目录的运行脚本是 MSYS2/bash 脚本：检出必须保持 LF，
+# 否则 Windows 克隆（core.autocrlf=true）会给脚本加上 \r，bash 会报解释器错误。
+*.sh text eol=lf
