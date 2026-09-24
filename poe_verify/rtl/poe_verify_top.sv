@@ -37,6 +37,10 @@ module poe_verify_top #(
     input  logic [0:0]       imem_saddr,      // 0=s0 1=s1
     input  logic [3:0]       imem_waddr,      // 行号 = sub_pc
     input  logic [63:0]      imem_wdata,      // 一行 = {lane0, lane1}
+    // ---- MUX 指令存储预载（与微指令画像配套）----
+    input  logic                 mux_imem_we,      // 写使能
+    input  logic [MUX_AW-1:0]    mux_imem_waddr,   // 行号 = sub_pc
+    input  logic [MUX_ROW_W-1:0] mux_imem_wdata,   // 一行 = 32 条 × 11bit
     // ---- DUT 出口 KO（被验对象）----
     output logic             out_vld,
     output logic [383:0]     out_data,
@@ -82,6 +86,9 @@ module poe_verify_top #(
         .imem_saddr(imem_saddr),
         .imem_waddr(imem_waddr),
         .imem_wdata(imem_wdata),
+        .mux_imem_we(mux_imem_we),             // MUX 指令存储预载
+        .mux_imem_waddr(mux_imem_waddr),
+        .mux_imem_wdata(mux_imem_wdata),
         .out_vld(out_vld),
         .out_data(out_data),
         .out_tid(out_tid),
@@ -118,6 +125,9 @@ module poe_verify_top #(
         .imem_saddr(imem_saddr),
         .imem_waddr(imem_waddr),
         .imem_wdata(imem_wdata),
+        .mux_imem_we(mux_imem_we),
+        .mux_imem_waddr(mux_imem_waddr),
+        .mux_imem_wdata(mux_imem_wdata),
         .out_vld(out_vld_rm),
         .out_data(out_data_rm),
         .out_tid(out_tid_rm),

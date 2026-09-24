@@ -28,6 +28,10 @@ interface poe_if (
     logic [0:0]   imem_saddr;     // 0=s0（x0..x15）1=s1（x8..x31）
     logic [3:0]   imem_waddr;     // 行号 = sub_pc
     logic [63:0]  imem_wdata;     // 一行 = {lane0, lane1} 两条 32bit 指令
+    // ---- 预载：MUX 指令存储（一行 = 32 条 × 11bit）----
+    logic         mux_imem_we;    // 写使能
+    logic [3:0]   mux_imem_waddr; // 行号 = sub_pc
+    logic [351:0] mux_imem_wdata; // 一行 = 32 条 × 11bit
     // ---- DUT 侧观测 ----
     logic         out_vld;        // 出口 KO 有效（一拍）
     logic [383:0] out_data;       // 出口 48B（EU 回刷结果）

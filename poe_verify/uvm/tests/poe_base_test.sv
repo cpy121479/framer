@@ -68,11 +68,31 @@ class poe_base_test extends uvm_test;
         @(posedge vif.clk);
     endtask
 
+    // 预载 MUX 指令存储：fetcher k ← RF[254-2k]（mvld=2），使窗口 word(15-r) = 表 x_r
+    task load_mux_imem();
+        virtual poe_if vif = poe_uvm_pkg::g_vif;
+        bit [351:0] row_img;
+        wait (vif.rst_n === 1'b1);
+        row_img = '0;
+        for (int k = 0; k < 32; k++)
+            row_img[11*k +: 11] = {1'b1, 2'd2, 8'(254 - 2*k)};   // i=1, mvld=2, off=254-2k
+        for (int r = 0; r < 16; r++) begin
+            @(posedge vif.clk);
+            vif.mux_imem_we    <= 1'b1;
+            vif.mux_imem_waddr <= r[3:0];
+            vif.mux_imem_wdata <= row_img;
+        end
+        @(posedge vif.clk);
+        vif.mux_imem_we <= 1'b0;
+        @(posedge vif.clk);
+    endtask
+
     task run_phase(uvm_phase phase);
         poe_ko_seq seq;
         int done_cnt = 0;
         phase.raise_objection(this);
         load_imem();
+        load_mux_imem();
         seq = poe_ko_seq::type_id::create("seq");
         seq.n_ko = 2;              // 本版先发 2 个 KO（两个并发线程）
         seq.head = 32'd0;          // 程序基址 = burst 指令存储第 0 行

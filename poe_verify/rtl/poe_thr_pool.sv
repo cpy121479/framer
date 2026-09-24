@@ -57,9 +57,12 @@ module poe_thr_pool #(
     output logic             task_vld,
     output logic [TID_W-1:0] task_tid,
     output logic [3:0]       task_sub_pc,       // 示例 EU 只吃 4bit（真实 sub_pc 8bit）
+    output logic             task_last,         // 本 task 是该线程最后一条（EU 壳据此占位写 TH_STAT）
     input  logic             task_rdy,
     input  logic             eu_done,
     input  logic [TID_W-1:0] eu_done_tid,
+    // ---- CSR 观测（线程结束由 EU 写 TH_STAT，池子只看不写）----
+    input  logic [N_THR*8-1:0] th_stat_flat,    // 每线程 TH_STAT：tid*8 +: 8
     // ---- 出口 KO（单口）----
     output logic             out_vld,
     output logic [383:0]     out_data,
@@ -144,13 +147,9 @@ module poe_thr_pool #(
                     t_csr_d[t] = {{(16-TS_W){1'b0}}, r_jt[t]};
                 end
                 T_DONE: begin
-                    if (t_ph[t] == 2'd0) begin
-                        t_rq[t]    = RQ_CSR;                                 // 先写 TH_STAT=DONE
-                        t_csr_a[t] = A_TH_STAT;
-                        t_csr_d[t] = {8'd0, TH_DONE};
-                    end else begin
-                        t_rq[t] = RQ_EVENT;                                  // 再发 thr_done
-                    end
+                    // 线程结束由 EU 写 CSR 0x9 TH_STAT=DONE（占位：将来由微指令写）；
+                    // 池子只等它到，再发 thr_done 事件。
+                    if (th_stat_flat[t*8 +: 8] == TH_DONE) t_rq[t] = RQ_EVENT;
                 end
                 T_OUT:   t_rq[t] = RQ_KO;                                    // 出口 KO 被取走才释放槽
                 default: t_rq[t] = RQ_NONE;
@@ -199,6 +198,8 @@ module poe_thr_pool #(
     assign task_vld    = sel_vld && (sel_rq == RQ_TASK);
     assign task_tid    = sel_tid;
     assign task_sub_pc = r_b[sel_tid][t_bid[sel_tid][BIDX_W-1:0]][BF_SUBPC_LSB +: 4];
+    // 本 task 是线程最后一条 = 末 ts（r_last）的最后一条 burst
+    assign task_last   = task_vld && r_last[sel_tid] && (t_bid[sel_tid] == (r_n[sel_tid] - 4'd1));
 
     assign csr_we      = sel_vld && (sel_rq == RQ_CSR);
     assign csr_wtid    = sel_tid;
@@ -313,11 +314,9 @@ module poe_thr_pool #(
                             t_st[t]  <= T_ISS;
                         end
                     end
-                    // 线程结束：写 TH_STAT=DONE，再发 thr_done
+                    // 线程结束：等 EU 写完 TH_STAT=DONE，发 thr_done 事件
                     T_DONE: begin
-                        if (t_ph[t] == 2'd0) begin
-                            if (served && (sel_rq == RQ_CSR)) t_ph[t] <= 2'd1;
-                        end else if (served && (sel_rq == RQ_EVENT)) begin
+                        if (served && (sel_rq == RQ_EVENT)) begin
                             t_ph[t]        <= 2'd0;
                             t_st[t]        <= T_OUT;
                             thr_done_p     <= 1'b1;

@@ -57,9 +57,11 @@ module pool_smoke_tb;
     logic                  task_vld;               // task 出口有效
     logic [TID_W-1:0]      task_tid;               // task 属于哪个线程
     logic [3:0]            task_sub_pc;            // 微指令行号（示例 EU 只吃 4bit）
+    logic                  task_last;              // 本 task 是该线程最后一条
     logic                  task_rdy;               // 假 EU 能否收
     logic                  eu_done;                // 假 EU 完成脉冲
     logic [TID_W-1:0]      eu_done_tid;            // 完成 pulse 属于哪个线程
+    logic [N_THR*8-1:0]    th_stat_flat;           // 每线程 TH_STAT（假 EU 代写，池子只读）
     logic                  out_vld;                // 出口 KO 有效
     logic [383:0]          out_data;               // 出口 48B 报文
     logic [TID_W-1:0]      out_tid;                // 出口 KO 属于哪个线程
@@ -97,9 +99,11 @@ module pool_smoke_tb;
         .task_vld        (task_vld),        // task 出口有效
         .task_tid        (task_tid),        // task 属于哪个线程
         .task_sub_pc     (task_sub_pc),     // 微指令行号
+        .task_last       (task_last),       // 本 task 是该线程最后一条
         .task_rdy        (task_rdy),        // 假 EU 能否收
         .eu_done         (eu_done),         // 假 EU 完成
         .eu_done_tid     (eu_done_tid),     // 完成属于哪个线程
+        .th_stat_flat    (th_stat_flat),    // 线程结束状态（EU 写，池子读）
         .out_vld         (out_vld),         // 出口 KO 有效
         .out_data        (out_data),        // 出口报文
         .out_tid         (out_tid),         // 出口 KO 线程号
@@ -134,6 +138,8 @@ module pool_smoke_tb;
     logic [TID_W-1:0] eu_tid;
     logic [4:0]       eu_cnt;
     logic             eu_done_r;
+    logic             eu_last;            // 当前占用的这条 task 是不是线程最后一条
+    logic [7:0]       th_stat_q [N_THR];  // 模拟 CSR 0x9：EU 写完，池子读
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -141,22 +147,30 @@ module pool_smoke_tb;
             eu_tid    <= '0;
             eu_cnt    <= '0;
             eu_done_r <= 1'b0;
+            eu_last   <= 1'b0;
+            for (int t = 0; t < N_THR; t++) th_stat_q[t] <= 8'h01;   // 建线程后 RUN
         end else begin
             eu_done_r <= 1'b0;                      // 完成是单拍脉冲
             if (!eu_busy) begin
                 if (task_vld && task_rdy) begin     // 收下一条 task
                     eu_busy <= 1'b1;
                     eu_tid  <= task_tid;
+                    eu_last <= task_last;
                     eu_cnt  <= '0;
                 end
             end else if (eu_cnt == EU_LAT-1) begin  // 占用期满 → 回 done
                 eu_busy   <= 1'b0;
                 eu_done_r <= 1'b1;
+                if (eu_last) th_stat_q[eu_tid] <= TH_DONE;   // 末条 task：模拟 EU 写 TH_STAT=DONE
             end else begin
                 eu_cnt <= eu_cnt + 5'd1;
             end
         end
     end
+
+    always_comb
+        for (int t = 0; t < N_THR; t++)
+            th_stat_flat[t*8 +: 8] = th_stat_q[t];
 
     assign task_rdy    = eu_ready && !eu_busy;   // 假 EU 一次只收一条
     assign eu_done     = eu_done_r;

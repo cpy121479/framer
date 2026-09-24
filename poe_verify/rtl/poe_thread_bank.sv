@@ -12,9 +12,8 @@
 //         因为预发射口按 44bit 表项写、不是字节对齐的。
 //
 // RF = 每线程 **256B（2048bit = 64 槽 × 32bit，槽 0 在最高位）**。
-//   示例 EU 模型只有 128B：平台给 EU 的是表的高 EU_RF_W 位（槽 0..EU_RF_W/32-1），
-//   EU 回刷也只覆盖这一段，低半区保持；接真实 256B EU 时把 EU_RF_W 设成 = RF_W。
-//   读给 EU 前把槽位 0（x0，最高 32bit）强制清零。
+//   本模块只做存储：给 MUX 一个"整份 RF 读口 + 整份 RF 回写口"，
+//   取数/回写的字节位置由 MUX（poe_mux）按 MUX 指令决定，bank 不解释 RF 的语义。
 // EU 侧对接（保持不变）：RMW 的 mstatus slot0 ← CSR 0x2 CCR；ro_regs 的 mcycle ← CSR 0x4 SYS_TS；
 //   EU 的 WO 回刷本版只计数（真表里暂无对应只写寄存器）。
 // 预发射口（与 DUT 的 csr 预发射口同形）：KO 建线程拍预写 CW 窗低 4 表项，
@@ -26,7 +25,6 @@ module poe_thread_bank #(
     parameter int N_THR = 8,      // 线程数 = CSR/RF 表的份数
     parameter int TID_W = 3,      // 线程号位宽
     parameter int RF_W    = 2048, // 每线程 RF 位宽（256B = 64 槽 × 32bit）
-    parameter int EU_RF_W = 1024, // 送/收 EU 的 RF 视图位宽（示例 EU 模型 128B = 32 槽）
     parameter int CSRB  = 72      // 每线程 CSR 字节数（0x00..0x47）
 ) (
     input  logic             clk,             // 时钟
@@ -34,11 +32,15 @@ module poe_thread_bank #(
     input  logic             alloc,           // 申请线程脉冲（最高优先级）
     input  logic [TID_W-1:0] alloc_tid,       // 清哪个线程
     input  logic [15:0]      alloc_base_ts,   // 建线程同拍写 CSR 0xc PC_INTER（程序基址）
-    input  logic             eu_done,         // EU 结果有效拍
-    input  logic [TID_W-1:0] eu_done_tid,     // 结果属于哪个线程
-    input  logic [EU_RF_W-1:0] eu_rf_out,     // EU 回刷的 RF（只覆盖表的高 EU_RF_W 位）
-    input  logic [127:0]     eu_rmw_out,      // {mcause,mepc,mtvec,mstatus}；mstatus[15:0] → CSR 0x2
-    input  logic [0:0]       eu_wo_fwe,       // 只写使能
+    input  logic             mux_rf_we,       // MUX 回写 RF（一拍，一个 task 一次）
+    input  logic [TID_W-1:0] mux_rf_tid,      // 回写哪个线程
+    input  logic [RF_W-1:0]  mux_rf_wdata,    // 回写后的整份 RF
+    // ---- EU 侧 POE CSR 写口（通用：地址 + 位宽 + 数据；CCR 只是地址 0x2 的一个表项）----
+    input  logic             eu_csr_we,       // EU 发起的 CSR 写使能
+    input  logic [TID_W-1:0] eu_csr_wtid,     // 写哪个线程
+    input  logic [6:0]       eu_csr_waddr,    // 写地址（字节偏移）
+    input  logic [2:0]       eu_csr_ww,       // 写位宽码
+    input  logic [383:0]     eu_csr_wdata,    // 写数据（低位对齐）
     input  logic             pre_we,          // 预发射口写使能（= 平台 pre_vld）
     input  logic [TID_W-1:0] pre_tid,         // 预写哪个线程的 CW 窗
     input  logic [PRE_N-1:0] pre_strb,        // 每个表项一位（低 4 项）
@@ -52,10 +54,8 @@ module poe_thread_bank #(
     input  logic [6:0]       csr_raddr,       // 读地址
     input  logic [2:0]       csr_rw,          // 读位宽码
     output logic [383:0]     csr_rdata,       // 读数据（低位对齐）
-    input  logic [TID_W-1:0] eu_rd_tid,       // 当前 task 的线程号
-    output logic [EU_RF_W-1:0] rf_rdata,      // 送 EU 的 RF 视图（槽 0 = x0，已清零）
-    output logic [127:0]     rmw_rdata,       // RMW 组 → EU 的 rmw_in
-    output logic [63:0]      ro_regs,         // 只读组 → EU 的 ro_regs
+    input  logic [TID_W-1:0] rf_rd_tid,       // MUX 要读哪个线程的 RF
+    output logic [RF_W-1:0]  rf_rd,           // 该线程整份 256B RF（组合读）
     output logic [N_THR*RF_W-1:0]   rf_flat,  // 全表 RF
     output logic [N_THR*CSRB*8-1:0] csr_flat  // 全表 CSR（按字节：tid*576 +: 576）
 );
@@ -79,25 +79,10 @@ module poe_thread_bank #(
     logic [CW_N*CW_W-1:0] cw [N_THR];               // 0x1c..0x47：CW 窗（8×44bit）
     logic [RF_W-1:0] rf  [N_THR];
 
-    // EU 回刷合并值：表的高 EU_RF_W 位来自 EU，低 (RF_W-EU_RF_W) 位保持表内旧值；
-    // RF_W == EU_RF_W（真实 256B EU）时就是 EU 的整表值。
-    logic [RF_W-1:0] rf_wb;
-    always_comb begin
-        rf_wb = rf[eu_done_tid];
-        rf_wb[RF_W-1 -: EU_RF_W] = eu_rf_out;
-    end
-
-    // ---- EU 读口 ----
-    // EU 视图 = 表的高 EU_RF_W 位（槽 0..EU_RF_W/32-1），其中槽 0（x0）硬连零
-    assign rf_rdata  = {32'd0, rf[eu_rd_tid][RF_W-33 -: EU_RF_W-32]};
-    // RMW 组布局按 sa_pkg：mstatus[127:96] | mtvec[95:64] | mepc[63:32] | mcause[31:0]
-    // 平台把线程 CCR（CSR 0x2，低字节在低地址）映射到 **mstatus 的低 16bit**；
-    // mtvec/mepc/mcause 本版不建模（给 0）。注意别把它放到 [15:0]（那是 mcause 槽）。
-    assign rmw_rdata = {16'd0,
-                        csr[eu_rd_tid][A_CCR + 1], csr[eu_rd_tid][A_CCR],   // mstatus[15:0] = CCR
-                        96'd0};                                            // mtvec/mepc/mcause = 0
-    assign ro_regs   = {{csr[eu_rd_tid][A_SYS_TS+3], csr[eu_rd_tid][A_SYS_TS+2],
-                         csr[eu_rd_tid][A_SYS_TS+1], csr[eu_rd_tid][A_SYS_TS]}, 32'd0};
+    // ---- MUX 读口：整份 RF 给 MUX，按字节切数由 MUX 自己做 ----
+    assign rf_rd = rf[rf_rd_tid];
+    // 注：POE CSR ↔ EU 侧 CSR（RISC-V 束）的映射**不在这里**，
+    //     已经挪到 EU 壳（poe_eu_dut/poe_eu_rm），bank 只做通用存储。
 
     // ---- SYS_TS：平台每拍刷新的系统时标（EU 当 mcycle 读）----
     logic [31:0] sys_ts;
@@ -124,17 +109,10 @@ module poe_thread_bank #(
         end
     end
 
-    // ---- EU 回刷：done 拍直接落表（RF 整表 + CCR；WO 只计数）----
-    //   契约见 poe_eu_rm 文件头：done 拍 rf_out/rmw_out 同拍有效。
-    //   这里不能再打一拍：线程池在 done 的下一拍就可能发同线程的下一条 task，
-    //   多一级流水会让 EU 读到回刷前的旧 RF（RAW 冒险）。
-    logic [31:0]      wo_cnt;
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n)                    wo_cnt <= '0;
-        else if (eu_done && eu_wo_fwe[0]) wo_cnt <= wo_cnt + 32'd1;   // WO 本版只计数（无落点）
-    end
-
-    // ---- 三个写来源仲裁：① 申请清零 ② EU 回刷 ③ 平台线程侧写 ----
+    // ---- 四个写来源：① 申请清零+初始化 ② EU 的 RF 回刷 ③ EU 的 CSR 写 ④ 平台线程侧 CSR 写 ----
+    //   EU 的 RF 回刷必须 done 拍直接落表（契约见 poe_eu_rm 文件头）：
+    //   线程池在 done 的下一拍就可能发同线程的下一条 task，多一级流水会读到旧 RF。
+    //   CSR 写（CCR 等）走同一套字节/位宽逻辑，CCR 只是地址 0x2 的一个表项，不再特判。
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             for (int t = 0; t < N_THR; t++) begin
@@ -154,13 +132,10 @@ module poe_thread_bank #(
                 csr[alloc_tid][A_CUR_TS]       <= 8'd0;                 // 0xe CUR_TS = 0
                 rf[alloc_tid] <= '0;
             end
-            // EU 回刷：只有"同一拍又在 alloc 同一个 tid"才让位（正常不会发生）
-            if (eu_done && !(alloc && (alloc_tid == eu_done_tid))) begin
-                rf[eu_done_tid] <= rf_wb;
-                if (eu_rmw_out[111:96] != {csr[eu_done_tid][A_CCR+1], csr[eu_done_tid][A_CCR]}) begin
-                    csr[eu_done_tid][A_CCR]     <= eu_rmw_out[103:96];
-                    csr[eu_done_tid][A_CCR + 1] <= eu_rmw_out[111:104];
-                end
+            // MUX 回写整份 RF：一个 task 一次（MUX 已经把没被指令覆盖的字节并好）
+            //   只有"同一拍又在 alloc 同一个 tid"才让位（正常不会发生）
+            if (mux_rf_we && !(alloc && (alloc_tid == mux_rf_tid))) begin
+                rf[mux_rf_tid] <= mux_rf_wdata;
             end
             // 平台线程侧写：只有"同一拍又在 alloc 同一个 tid"才让位
             if (csr_we && !(alloc && (alloc_tid == csr_wtid))) begin
@@ -172,6 +147,17 @@ module poe_thread_bank #(
                             csr[csr_wtid][int'(csr_waddr) + i] <= csr_wdata[i*8 +: 8];
                         else
                             cw[csr_wtid][(int'(csr_waddr) - CWB + i)*8 +: 8] <= csr_wdata[i*8 +: 8];
+                    end
+            end
+            // EU 侧 CSR 写（通用口，CCR 就是地址 0x2）：与线程侧同一套落表逻辑，
+            //   放在最后 → 同一拍同地址时 EU 优先。
+            if (eu_csr_we && !(alloc && (alloc_tid == eu_csr_wtid))) begin
+                for (int i = 0; i < 44; i++)
+                    if ((i < nbytes(eu_csr_ww)) && ((int'(eu_csr_waddr) + i) < CSRB)) begin
+                        if ((int'(eu_csr_waddr) + i) < CWB)
+                            csr[eu_csr_wtid][int'(eu_csr_waddr) + i] <= eu_csr_wdata[i*8 +: 8];
+                        else
+                            cw[eu_csr_wtid][(int'(eu_csr_waddr) - CWB + i)*8 +: 8] <= eu_csr_wdata[i*8 +: 8];
                     end
             end
             // 预发射口：建线程拍预写 CW 窗低 4 表项。

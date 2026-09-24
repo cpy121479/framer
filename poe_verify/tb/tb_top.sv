@@ -23,6 +23,10 @@ module tb_top;
     logic [0:0]   imem_saddr = '0;
     logic [3:0]   imem_waddr = '0;
     logic [63:0]  imem_wdata = '0;
+    // ---- MUX 指令预载 ----
+    logic             mux_imem_we = 1'b0;
+    logic [3:0]       mux_imem_waddr = '0;
+    logic [351:0]     mux_imem_wdata = '0;
     // ---- 出口 / 观测 ----
     logic         out_vld;
     logic [383:0] out_data;
@@ -59,6 +63,9 @@ module tb_top;
         .imem_saddr(imem_saddr),
         .imem_waddr(imem_waddr),
         .imem_wdata(imem_wdata),
+        .mux_imem_we(mux_imem_we),
+        .mux_imem_waddr(mux_imem_waddr),
+        .mux_imem_wdata(mux_imem_wdata),
         .out_vld(out_vld),
         .out_data(out_data),
         .out_tid(out_tid),
@@ -120,6 +127,22 @@ module tb_top;
         imem_we = 1'b0;
     endtask
 
+    // ---- 预载 MUX 指令存储（与微指令画像配套）----
+    //   打包序按 mux_shift_conv 规格：fetcher 0 = 窗口最高 16bit；示例画像要让窗口
+    //   word(15-r) = RF 表的 x_r（字节 252-4r..255-4r），推出 fetcher k ← RF[254-2k]（mvld=2）。
+    //   这样示例 EU 从窗口看到的就是 x0..x15（与之前直连 RF 高位视图等价）。
+    task automatic preload_mux_imem();
+        logic [351:0] row_img;
+        row_img = '0;
+        for (int k = 0; k < 32; k++)
+            row_img[11*k +: 11] = {1'b1, 2'd2, 8'(254 - 2*k)};   // i=1, mvld=2, off=254-2k
+        for (int r = 0; r < 16; r++) begin
+            mux_imem_we = 1'b1; mux_imem_waddr = r[3:0]; mux_imem_wdata = row_img;
+            @(posedge clk); #1;
+        end
+        mux_imem_we = 1'b0;
+    endtask
+
     // ---- 出口 KO / 线程结束计数 ----
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -164,6 +187,7 @@ module tb_top;
         @(posedge clk);
 
         preload_imem();
+        preload_mux_imem();
 
         // 2 个 KO = 2 个并发线程；第 2 个优先级更高（1 < 3），用来跑多线程调度
         // 预发射口：tid0 写全部 4 项；tid1 只写第 0/2 项（strb=0101，其余项应保持 0）

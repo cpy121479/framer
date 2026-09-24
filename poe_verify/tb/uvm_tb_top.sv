@@ -42,6 +42,9 @@ module uvm_tb_top;
         .imem_saddr(u_if.imem_saddr),                     //   选级
         .imem_waddr(u_if.imem_waddr),                     //   行号
         .imem_wdata(u_if.imem_wdata),                     //   内容
+        .mux_imem_we(u_if.mux_imem_we),                   // MUX 指令存储预载
+        .mux_imem_waddr(u_if.mux_imem_waddr),
+        .mux_imem_wdata(u_if.mux_imem_wdata),
         .out_vld(u_if.out_vld),                           // 出口 KO（被验对象）
         .out_data(u_if.out_data),
         .out_tid(u_if.out_tid),
@@ -78,6 +81,9 @@ module uvm_tb_top;
         .imem_saddr(u_if.imem_saddr),
         .imem_waddr(u_if.imem_waddr),
         .imem_wdata(u_if.imem_wdata),
+        .mux_imem_we(u_if.mux_imem_we),
+        .mux_imem_waddr(u_if.mux_imem_waddr),
+        .mux_imem_wdata(u_if.mux_imem_wdata),
         .out_vld(u_if.out_vld_rm),                        // RM 出口 KO（期望值）
         .out_data(u_if.out_data_rm),
         .out_tid(u_if.out_tid_rm),
@@ -111,6 +117,9 @@ module uvm_tb_top;
         u_if.imem_saddr   = '0;
         u_if.imem_waddr   = '0;
         u_if.imem_wdata   = '0;
+        u_if.mux_imem_we    = 1'b0;
+        u_if.mux_imem_waddr = '0;
+        u_if.mux_imem_wdata = '0;
     end
 
     // ---- 复位 + 把接口交给 UVM ----

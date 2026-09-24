@@ -86,6 +86,25 @@ package poe_pkg;
     localparam int         CW_N       = 8;       // C 窗表项数
     localparam int         PRE_N      = 4;       // 预发射口一次预写的表项数（CW 窗低 4 项）
 
+    // ---- ⑤ MUX（RF 取数）----
+    //   一行 MUX 指令 = 32 条 × 11bit = 352bit；第 k 条（fetcher k）固定对应 64B 窗口的
+    //   一个 2B 槽，且 **fetcher 0 = 最高 16bit**（与 mux_shift_conv 规格一致）。
+    //   单条指令（11bit）：
+    //     [10]    i       0 = 偏移从 CSR MUX_PTR（0x14，8×8bit 表）里按 src_ptr 低 3bit 选
+    //                     1 = [7:0] 直接就是 RF 字节偏移
+    //     [9:8]   mvld    从该偏移取几个字节：0/1/2（不是 +1）
+    //     [7:0]   src_ptr i=0 时选 MUX_PTR 表项；i=1 时是偏移本身
+    //   窗口槽内低字节先：mvld=2 → win[2k]=RF[off]、win[2k+1]=RF[off+1]。
+    localparam int MUX_AW     = 4;                  // MUX 指令行号位宽（= sub_pc）
+    localparam int MUX_INS_N  = 32;                 // 一行的 MUX 指令条数
+    localparam int MUX_INS_W  = 11;                 // 单条 MUX 指令位宽
+    localparam int MUX_ROW_W  = MUX_INS_N*MUX_INS_W; // 352bit/行
+    localparam int MI_I_LSB   = 10;                 // 立即偏移控制位
+    localparam int MI_MVLD_LSB= 8;                  // 取几个字节（0~2）
+    localparam int MI_PTR_LSB = 0;                  // src_ptr / 立即偏移
+    localparam int WIN_B      = 64;                 // EU 操作数窗口字节数（64B）
+    localparam int WIN_W      = WIN_B*8;            // 512bit
+
     // 访问位宽码（写/读口用它表示"本次访问多少个字节"）
     localparam logic [2:0] W8   = 3'd0;   //  8bit
     localparam logic [2:0] W16  = 3'd1;   // 16bit
