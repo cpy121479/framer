@@ -26,5 +26,7 @@ class poe_env extends uvm_env;
         rm_mon.ap_rf.connect(scb.rf_rm_fifo.analysis_export);
         dut_mon.ap_ko.connect(scb.ko_dut_fifo.analysis_export);
         rm_mon.ap_ko.connect(scb.ko_rm_fifo.analysis_export);
+        dut_mon.ap_err.connect(scb.err_dut_fifo.analysis_export);
+        rm_mon.ap_err.connect(scb.err_rm_fifo.analysis_export);
     endfunction
 endclass

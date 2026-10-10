@@ -54,6 +54,7 @@ module poe_verify_top #(
     output logic             busy,            // 有线程在跑
     output logic [7:0]       ct_skip_cnt,     // 跳过的 c_task 条数
     output int               chk_cnt,         // 已完成的 ts 比对次数
+    output int               err_chk,         // 已完成的 EU 错误标志检查次数
     output int               err_cnt,         // 累计错误数
     output logic [N_THR*RF_W-1:0] rf_dut_flat,// DUT 全表 RF
     output logic [N_THR*RF_W-1:0] rf_rm_flat, // RM 全表 RF
@@ -66,6 +67,8 @@ module poe_verify_top #(
     logic [383:0]     out_data_rm;             // RM 出口报文
     logic [TID_W-1:0] out_tid_rm;              // RM 出口线程号
     logic [3:0]       err_dut, err_rm;         // 两侧 EU 错误标志
+    logic             err_vld_dut, err_vld_rm; // 两侧错误标志有效拍
+    logic [TID_W-1:0] err_tid_dut, err_tid_rm; // 两侧错误标志对应线程
     logic [N_THR*8-1:0] th_stat_dut, cur_ts_dut, th_stat_rm;
 
     // ---- DUT 平台：控制流来源；出口 KO / 事件是被验对象 ----
@@ -100,6 +103,8 @@ module poe_verify_top #(
         .busy(busy),
         .ct_skip_cnt(ct_skip_cnt),
         .err_out(err_dut),
+        .eu_err_vld(err_vld_dut),
+        .eu_err_tid(err_tid_dut),
         .csr_flat(csr_dut_flat),     // 自检看 CW 窗（预发射口写进去的低 4 项）
         .rf_flat(rf_dut_flat),
         .ccr_flat(ccr_dut_flat),
@@ -139,6 +144,8 @@ module poe_verify_top #(
         .busy(),
         .ct_skip_cnt(),
         .err_out(err_rm),
+        .eu_err_vld(err_vld_rm),
+        .eu_err_tid(err_tid_rm),
         .csr_flat(),                 // RM 侧 CSR 全表本路径不用（UVM 路径才采）
         .rf_flat(rf_rm_flat),
         .ccr_flat(ccr_rm_flat),
@@ -163,6 +170,12 @@ module poe_verify_top #(
         .ccr_dut(ccr_dut_flat),
         .ccr_rm(ccr_rm_flat),
         .th_stat_dut(th_stat_dut),
+        .err_vld_dut(err_vld_dut),                 // EU 错误标志（边界契约的一部分）
+        .err_dut(err_dut),
+        .err_tid_dut(err_tid_dut),
+        .err_vld_rm(err_vld_rm),
+        .err_rm(err_rm),
+        .err_tid_rm(err_tid_rm),
         .ko_dut_vld(out_vld),
         .ko_dut_data(out_data),
         .ko_dut_tid(out_tid),
@@ -170,6 +183,7 @@ module poe_verify_top #(
         .ko_rm_data(out_data_rm),
         .ko_rm_tid(out_tid_rm),
         .chk_cnt(chk_cnt),
+        .err_chk(err_chk),
         .err_cnt(err_cnt)
     );
 endmodule

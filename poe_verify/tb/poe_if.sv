@@ -43,6 +43,10 @@ interface poe_if (
     logic [TID_W-1:0] thr_done_tid; // 结束的线程号
     logic         busy;           // 平台上还有线程在跑
     logic [7:0]   ct_skip_cnt;    // 跳过的 c_task 条数
+    // ---- EU 错误标志（随结果拍有效；EU 边界契约的一部分）----
+    logic         eu_err_vld;     // DUT 侧错误标志有效
+    logic [5:0]   eu_err_tid;     // DUT 侧错误属于哪个线程
+    logic [3:0]   eu_err;         // DUT 侧错误标志
     logic [N_THR*RF_W-1:0] rf_dut;// DUT 侧全表 RF：tid*RF_W +: RF_W
     logic [N_THR*72*8-1:0] csr_dut;// DUT 侧 CSR 全表（按字节）：tid*576 +: 576
     logic [N_THR*32-1:0]   ccr_dut;// DUT 侧全表 CCR：tid*32 +: 16
@@ -56,4 +60,8 @@ interface poe_if (
     logic [N_THR*RF_W-1:0] rf_rm; // RM 侧全表 RF
     logic [N_THR*72*8-1:0] csr_rm; // RM 侧 CSR 全表（按字节）
     logic [N_THR*32-1:0]   ccr_rm;// RM 侧全表 CCR
+    // ---- RM 侧 EU 错误标志 ----
+    logic         eu_err_vld_rm;  // RM 侧错误标志有效
+    logic [5:0]   eu_err_tid_rm;  // RM 侧错误属于哪个线程
+    logic [3:0]   eu_err_rm;      // RM 侧错误标志
 endinterface

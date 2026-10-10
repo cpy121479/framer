@@ -35,7 +35,7 @@ module tb_top;
     logic [5:0]   ts_done_tid, thr_done_tid;
     logic [3:0]   ts_done_idx;
     logic [7:0]   ct_skip_cnt;
-    int           chk_cnt, err_cnt;
+    int           chk_cnt, err_cnt, err_chk;
     logic [64*2048-1:0] rf_dut, rf_rm;
     logic [64*32-1:0]   ccr_dut, ccr_rm;
     logic [64*72*8-1:0] csr_dut;      // DUT 全表 CSR（看 CW 窗 = 预发射口写的低 4 项）
@@ -78,6 +78,7 @@ module tb_top;
         .ct_skip_cnt(ct_skip_cnt),
         .csr_dut_flat(csr_dut),
         .chk_cnt(chk_cnt),
+        .err_chk(err_chk),
         .err_cnt(err_cnt),
         .rf_dut_flat(rf_dut),
         .rf_rm_flat(rf_rm),
@@ -201,6 +202,7 @@ module tb_top;
         $display("CHK ts 边界=%0d  err=%0d  出口KO=%0d  线程结束=%0d（ts 粒度：RF 逐槽 + CCR；出口 KO：DUT vs RM）",
                  chk_cnt, err_cnt, ko_cnt, done_cnt);
         $display("c_task 跳过数=%0d", ct_skip_cnt);
+        $display("EU err 检查 %0d 次（示例模型期望全 0）", err_chk);
         $display("tid0 CW 低4项 = %h %h %h %h", cw_entry(0,0), cw_entry(0,1), cw_entry(0,2), cw_entry(0,3));
         $display("tid1 CW 低4项 = %h %h %h %h", cw_entry(1,0), cw_entry(1,1), cw_entry(1,2), cw_entry(1,3));
         $display("tid0 CCR dut=%h rm=%h", ccr_dut[0*32 +: 32], ccr_rm[0*32 +: 32]);

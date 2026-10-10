@@ -2,6 +2,7 @@
 // scoreboard：DUT / RM 两侧事件**按 (tid, ts) 配对**后比对
 //   · ts 边界：CSR 全表（0x00..0x47）+ RF 全表（256B = 64 槽）各自配对
 //   · 出口 KO：按 tid 配对（一个线程一条），逐位比 384bit 报文
+//   · EU 错误标志：两侧各自检查（本平台示例 EU 期望恒 0；两侧事件数也必须相等）
 //   · 配对不依赖到达顺序：先到的一侧暂存，另一侧到达时当场比，再清表
 //   · check_phase 检查"只到一侧"的残留事件，防止漏比
 // ============================================================================
@@ -12,6 +13,7 @@ class poe_scoreboard extends uvm_scoreboard;
     uvm_tlm_analysis_fifo #(poe_ev_item) csr_dut_fifo, csr_rm_fifo;
     uvm_tlm_analysis_fifo #(poe_ev_item) rf_dut_fifo,  rf_rm_fifo;
     uvm_tlm_analysis_fifo #(poe_ev_item) ko_dut_fifo,  ko_rm_fifo;
+    uvm_tlm_analysis_fifo #(poe_ev_item) err_dut_fifo, err_rm_fifo;
 
     // key = tid*TS_MAX + ts：同一 (tid, ts) 的 DUT/RM 事件成对比
     bit [8*72-1:0] csr_dut_tab [N_THR_MAX*TS_MAX];
@@ -28,6 +30,7 @@ class poe_scoreboard extends uvm_scoreboard;
     bit            ko_rm_vld   [N_THR_MAX];
 
     int csr_chk, csr_err, rf_chk, rf_err, ko_chk, ko_err;
+    int err_chk_dut, err_chk_rm, err_err;   // EU 错误标志计数/错误数
     `uvm_component_utils(poe_scoreboard)
 
     function new(string name = "poe_scoreboard", uvm_component parent = null);
@@ -42,6 +45,8 @@ class poe_scoreboard extends uvm_scoreboard;
         rf_rm_fifo   = new("rf_rm_fifo", this);
         ko_dut_fifo  = new("ko_dut_fifo", this);
         ko_rm_fifo   = new("ko_rm_fifo", this);
+        err_dut_fifo = new("err_dut_fifo", this);
+        err_rm_fifo  = new("err_rm_fifo", this);
         foreach (csr_dut_vld[k]) begin csr_dut_vld[k] = 1'b0; csr_rm_vld[k] = 1'b0; end
         foreach (rf_dut_vld[k])  begin rf_dut_vld[k]  = 1'b0; rf_rm_vld[k]  = 1'b0; end
         foreach (ko_dut_vld[t])  begin ko_dut_vld[t]  = 1'b0; ko_rm_vld[t]  = 1'b0; end
@@ -175,6 +180,27 @@ class poe_scoreboard extends uvm_scoreboard;
                 @(posedge poe_uvm_pkg::g_vif.clk);
                 if (ko_rm_fifo.try_get(r)) put_ko_rm(r);
             end
+            // ---- EU 错误标志（两侧各自检查；示例 EU 期望恒 0）----
+            forever begin
+                @(posedge poe_uvm_pkg::g_vif.clk);
+                if (err_dut_fifo.try_get(d)) begin
+                    err_chk_dut++;
+                    if (d.err !== 4'd0) begin
+                        err_err++;
+                        `uvm_error("ERR_CMP", $sformatf("DUT EU err_out 非 0：%b（tid=%0d）", d.err, d.tid))
+                    end
+                end
+            end
+            forever begin
+                @(posedge poe_uvm_pkg::g_vif.clk);
+                if (err_rm_fifo.try_get(r)) begin
+                    err_chk_rm++;
+                    if (r.err !== 4'd0) begin
+                        err_err++;
+                        `uvm_error("ERR_CMP", $sformatf("RM EU err_out 非 0：%b（tid=%0d）", r.err, r.tid))
+                    end
+                end
+            end
         join
     endtask
 
@@ -189,10 +215,17 @@ class poe_scoreboard extends uvm_scoreboard;
         if (csr_lone != 0) `uvm_error("SCB", $sformatf("CSR 有 %0d 个 (tid,ts) 只到一侧", csr_lone))
         if (rf_lone  != 0) `uvm_error("SCB", $sformatf("RF  有 %0d 个 (tid,ts) 只到一侧", rf_lone))
         if (ko_lone  != 0) `uvm_error("SCB", $sformatf("出口 KO 有 %0d 个 tid 只到一侧", ko_lone))
-        `uvm_info("SCB", $sformatf("CSR 比对 %0d 次错 %0d；RF 比对 %0d 次错 %0d；出口 KO 比对 %0d 次错 %0d",
-                  csr_chk, csr_err, rf_chk, rf_err, ko_chk, ko_err), UVM_LOW)
+        if (err_chk_dut != err_chk_rm) begin
+            err_err++;
+            `uvm_error("ERR_CMP", $sformatf("两侧 EU 错误标志事件数不等：dut=%0d rm=%0d",
+                       err_chk_dut, err_chk_rm))
+        end
+        `uvm_info("SCB", $sformatf("CSR 比对 %0d 次错 %0d；RF 比对 %0d 次错 %0d；出口 KO 比对 %0d 次错 %0d；EU 错误标志 dut=%0d rm=%0d 次错 %0d",
+                  csr_chk, csr_err, rf_chk, rf_err, ko_chk, ko_err,
+                  err_chk_dut, err_chk_rm, err_err), UVM_LOW)
         if (csr_chk == 0) `uvm_error("SCB", "没有 CSR 事件，比对未执行")
         if (rf_chk == 0)  `uvm_error("SCB", "没有 RF 事件，比对未执行")
         if (ko_chk == 0)  `uvm_error("SCB", "没有出口 KO，KO 比对未执行")
+        if (err_chk_dut == 0) `uvm_error("SCB", "没有 EU 错误标志事件，边界检查未执行")
     endfunction
 endclass

@@ -55,7 +55,9 @@ module uvm_tb_top;
         .thr_done_tid(u_if.thr_done_tid),
         .busy(u_if.busy),                                 // 观测
         .ct_skip_cnt(u_if.ct_skip_cnt),
-        .err_out(),                                       // EU 错误标志（本版没接检查）
+        .err_out(u_if.eu_err),                            // EU 错误标志（随结果拍有效）
+        .eu_err_vld(u_if.eu_err_vld),
+        .eu_err_tid(u_if.eu_err_tid),
         .rf_flat(u_if.rf_dut),                            // 两张表快照
         .csr_flat(u_if.csr_dut),                          //   CSR 全表（按字节）
         .ccr_flat(u_if.ccr_dut),
@@ -94,7 +96,9 @@ module uvm_tb_top;
         .thr_done_tid(),
         .busy(),
         .ct_skip_cnt(),
-        .err_out(),
+        .err_out(u_if.eu_err_rm),
+        .eu_err_vld(u_if.eu_err_vld_rm),
+        .eu_err_tid(u_if.eu_err_tid_rm),
         .rf_flat(u_if.rf_rm),                             // RM 侧两张表
         .csr_flat(u_if.csr_rm),
         .ccr_flat(u_if.ccr_rm),

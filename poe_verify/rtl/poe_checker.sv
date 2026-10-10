@@ -22,6 +22,13 @@ module poe_checker #(
     input  logic [N_THR*32-1:0]   ccr_dut,     // DUT 侧全表 CCR
     input  logic [N_THR*32-1:0]   ccr_rm,      // RM 侧全表 CCR
     input  logic [N_THR*8-1:0]    th_stat_dut, // DUT 侧全表 TH_STAT（线程结束时查自洽）
+    // EU 错误标志（随结果拍有效）：DUT 与 RM 必须一致，且本平台期望恒 0
+    input  logic                  err_vld_dut, // DUT 侧错误标志有效拍（= EU 结果拍）
+    input  logic [3:0]            err_dut,     // DUT 侧错误标志
+    input  logic [TID_W-1:0]      err_tid_dut, // DUT 侧错误属于哪个线程
+    input  logic                  err_vld_rm,  // RM 侧错误标志有效拍
+    input  logic [3:0]            err_rm,      // RM 侧错误标志
+    input  logic [TID_W-1:0]      err_tid_rm,  // RM 侧错误属于哪个线程
     // 出口 KO：DUT 与 RM 各自回刷出来的结果，逐条比
     input  logic                  ko_dut_vld,  // DUT 出口 KO 有效（一拍）
     input  logic [383:0]          ko_dut_data, // DUT 出口 48B 报文（EU 回刷结果）
@@ -30,18 +37,24 @@ module poe_checker #(
     input  logic [383:0]          ko_rm_data,  // RM 出口 48B 报文（期望值）
     input  logic [TID_W-1:0]      ko_rm_tid,   // 属于哪个线程
     output int chk_cnt,                        // 完成了几次 ts 比对
+    output int err_chk,                        // 完成了几次 EU 错误标志检查
     output int err_cnt                         // 累计错误数（RF/CCR/KO/自洽）
 );
     logic             ev_vld, thr_vld;
     logic [TID_W-1:0] ev_tid, thr_tid;
     logic [3:0]       ev_idx;
+    // EU 错误标志：打一拍对齐后比（两侧同拍有效）
+    logic             err_vld_r, err_vld_rm_r;
+    logic [3:0]       err_dut_r, err_rm_r;
+    logic [TID_W-1:0] err_tid_dut_r, err_tid_rm_r;
     // 出口 KO 打一拍对齐（两侧 KO 在各自 out_vld 拍有效）
     logic             ko_vld, ko_rm_vld_r;
     logic [383:0]     ko_data_r, ko_rm_data_r;
     logic [TID_W-1:0] ko_tid_r, ko_rm_tid_r;
-    int               chk_cnt_r, err_cnt_r, ko_cnt_r, ko_err_cnt;
+    int               chk_cnt_r, err_cnt_r, ko_cnt_r, ko_err_cnt, err_chk_r;
 
     assign chk_cnt = chk_cnt_r;
+    assign err_chk = err_chk_r;
     assign err_cnt = err_cnt_r;
 
     always_ff @(posedge clk or negedge rst_n) begin
@@ -50,6 +63,10 @@ module poe_checker #(
             thr_vld <= 1'b0; thr_tid <= '0;
             chk_cnt_r <= 0; err_cnt_r <= 0;
             ko_vld <= 1'b0; ko_rm_vld_r <= 1'b0; ko_cnt_r <= 0; ko_err_cnt <= 0;
+            err_vld_r <= 1'b0; err_vld_rm_r <= 1'b0;
+            err_dut_r <= '0; err_rm_r <= '0;
+            err_tid_dut_r <= '0; err_tid_rm_r <= '0;
+            err_chk_r <= 0;
         end else begin
             ev_vld  <= ts_done_vld;
             ev_tid  <= ts_done_tid;
@@ -62,6 +79,28 @@ module poe_checker #(
             ko_rm_vld_r <= ko_rm_vld;
             ko_rm_data_r<= ko_rm_data;
             ko_rm_tid_r <= ko_rm_tid;
+            err_vld_r   <= err_vld_dut;
+            err_vld_rm_r<= err_vld_rm;
+            err_dut_r   <= err_dut;
+            err_rm_r    <= err_rm;
+            err_tid_dut_r <= err_tid_dut;
+            err_tid_rm_r  <= err_tid_rm;
+
+            // EU 错误标志：DUT vs RM 一致，且（本平台示例 EU）必须为 0
+            if (err_vld_r) begin
+                err_chk_r <= err_chk_r + 1;
+                // 两侧必须同拍有效、同线程、同标志
+                if (!err_vld_rm_r || (err_tid_dut_r !== err_tid_rm_r) || (err_dut_r !== err_rm_r)) begin
+                    err_cnt_r <= err_cnt_r + 1;
+                    $display("CHK_ERR EU err 事件不一致 dut(vld=%b tid=%0d err=%b) rm(vld=%b tid=%0d err=%b)",
+                             err_vld_r, err_tid_dut_r, err_dut_r,
+                             err_vld_rm_r, err_tid_rm_r, err_rm_r);
+                end
+                if (err_dut_r !== 4'd0) begin
+                    err_cnt_r <= err_cnt_r + 1;
+                    $display("CHK_ERR EU err_out 非 0：%b（跨级冲突/越界写标志）", err_dut_r);
+                end
+            end
 
             if (ev_vld) begin
                 automatic int bad = 0;

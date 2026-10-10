@@ -62,6 +62,8 @@ module poe_platform #(
     output logic             busy,            // 平台上还有线程在跑
     output logic [7:0]       ct_skip_cnt,     // 被跳过的 c_task 条数（本版 c_task 未实现）
     output logic [3:0]       err_out,         // EU 回传的按线程错误标志
+    output logic             eu_err_vld,      // EU 错误标志有效拍（= EU 结果拍）
+    output logic [TID_W-1:0] eu_err_tid,      // 错误属于哪个线程
     // ---- 两张表（观测/比对用，扁平化：按 tid 切片）----
     output logic [N_THR*RF_W-1:0] rf_flat,    // 每线程 RF：tid*RF_W +: RF_W
     output logic [N_THR*72*8-1:0] csr_flat,   // 每线程 CSR 全表（按字节）：tid*576 +: 576
@@ -255,6 +257,9 @@ module poe_platform #(
 
     // CSR 全表直出到端口（验证侧按地址表切）；另外切出 ccr/th_stat/cur_ts 三个常用字段
     assign csr_flat = csr_flat_w;
+    // EU 的错误标志随结果波前同拍有效（契约见 poe_eu_rm 文件头）
+    assign eu_err_vld = eu_done;
+    assign eu_err_tid = eu_done_tid;
     always_comb begin
         for (int t = 0; t < N_THR; t++) begin
             // 小端：低字节在低地址（0x2 CCR / 0x9 TH_STAT / 0xe CUR_TS）

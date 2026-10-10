@@ -1,6 +1,6 @@
-// DUT 侧 monitor：ts 边界两张表 + 线程结束 + 出口 KO
+// DUT 侧 monitor：ts 边界两张表 + 线程结束 + 出口 KO + EU 错误标志
 class poe_dut_monitor extends uvm_monitor;
-    uvm_analysis_port #(poe_ev_item) ap_csr, ap_rf, ap_ko;   // CSR / RF 分开
+    uvm_analysis_port #(poe_ev_item) ap_csr, ap_rf, ap_ko, ap_err;  // CSR / RF / KO / ERR 分开
     virtual poe_if vif;
     `uvm_component_utils(poe_dut_monitor)
 
@@ -9,6 +9,7 @@ class poe_dut_monitor extends uvm_monitor;
         ap_csr = new("ap_csr", this);
         ap_rf  = new("ap_rf", this);
         ap_ko  = new("ap_ko", this);
+        ap_err = new("ap_err", this);
     endfunction
 
     task run_phase(uvm_phase phase);
@@ -39,13 +40,21 @@ class poe_dut_monitor extends uvm_monitor;
                 it.ko   = vif.out_data;
                 ap_ko.write(it);
             end
+            // EU 错误标志（随结果拍有效）
+            if (vif.eu_err_vld) begin
+                it = poe_ev_item::type_id::create("err_dut");
+                it.kind = poe_ev_item::EV_ERR;
+                it.tid  = int'(vif.eu_err_tid);
+                it.err  = vif.eu_err;
+                ap_err.write(it);
+            end
         end
     endtask
 endclass
 
 // RM 侧 monitor：同样的 ts 边界两张表 + 出口 KO（RM 的期望值）
 class poe_rm_monitor extends uvm_monitor;
-    uvm_analysis_port #(poe_ev_item) ap_csr, ap_rf, ap_ko;
+    uvm_analysis_port #(poe_ev_item) ap_csr, ap_rf, ap_ko, ap_err;
     virtual poe_if vif;
     `uvm_component_utils(poe_rm_monitor)
 
@@ -54,6 +63,7 @@ class poe_rm_monitor extends uvm_monitor;
         ap_csr = new("ap_csr", this);
         ap_rf  = new("ap_rf", this);
         ap_ko  = new("ap_ko", this);
+        ap_err = new("ap_err", this);
     endfunction
 
     task run_phase(uvm_phase phase);
@@ -81,6 +91,13 @@ class poe_rm_monitor extends uvm_monitor;
                 it.tid  = int'(vif.out_tid_rm);
                 it.ko   = vif.out_data_rm;
                 ap_ko.write(it);
+            end
+            if (vif.eu_err_vld_rm) begin
+                it = poe_ev_item::type_id::create("err_rm");
+                it.kind = poe_ev_item::EV_ERR;
+                it.tid  = int'(vif.eu_err_tid_rm);
+                it.err  = vif.eu_err_rm;
+                ap_err.write(it);
             end
         end
     endtask
