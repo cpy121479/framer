@@ -8,7 +8,7 @@ package poe_uvm_pkg;
 
     // UVM 侧宽度常量（与 tb/poe_if.sv 的 localparam 保持一致）
     localparam int POE_RF_W      = 2048;   // 每线程 RF 位宽（256B = 64 槽 × 32bit）
-    localparam int POE_CSR_BYTES = 72;     // 每线程 CSR 字节数（0x00..0x47）
+    localparam int POE_CSR_BYTES = 90;     // 每线程 CSR 字节数（0x00..0x59）
 
 `include "item/poe_item.sv"              // 事务：poe_ko_item（激励）/ poe_ev_item（观测）
 `include "seq/poe_ko_seq.sv"             // 序列：poe_ko_seq

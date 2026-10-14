@@ -8,6 +8,7 @@ interface poe_if (
     input logic clk,              // 时钟
     input logic rst_n             // 低有效异步复位
 );
+    import poe_pkg::*;            // CSR 字节数 CSRB 等常量（与平台同一张表）
     // 宽度定死：interface 的位宽就是 UVM 侧看到的契约，不做参数化
     // （Verilator 把不同参数化的 interface 当不同类型，virtual interface 会对不上）
     localparam int N_THR = 64;    // 线程数（表的份数）
@@ -48,7 +49,7 @@ interface poe_if (
     logic [5:0]   eu_err_tid;     // DUT 侧错误属于哪个线程
     logic [3:0]   eu_err;         // DUT 侧错误标志
     logic [N_THR*RF_W-1:0] rf_dut;// DUT 侧全表 RF：tid*RF_W +: RF_W
-    logic [N_THR*72*8-1:0] csr_dut;// DUT 侧 CSR 全表（按字节）：tid*576 +: 576
+    logic [N_THR*CSRB*8-1:0] csr_dut; // DUT 侧 CSR 全表（按字节）：tid*CSRB*8 +: CSRB*8
     logic [N_THR*32-1:0]   ccr_dut;// DUT 侧全表 CCR：tid*32 +: 16
     // ---- RM 侧观测（期望值）----
     logic         out_vld_rm;     // RM 出口 KO 有效
@@ -58,7 +59,7 @@ interface poe_if (
     logic [TID_W-1:0] ts_done_tid_rm; // 该 ts 属于哪个线程
     logic [TS_W-1:0] ts_done_idx_rm; // 第几个 ts
     logic [N_THR*RF_W-1:0] rf_rm; // RM 侧全表 RF
-    logic [N_THR*72*8-1:0] csr_rm; // RM 侧 CSR 全表（按字节）
+    logic [N_THR*CSRB*8-1:0] csr_rm;  // RM 侧 CSR 全表（按字节）
     logic [N_THR*32-1:0]   ccr_rm;// RM 侧全表 CCR
     // ---- RM 侧 EU 错误标志 ----
     logic         eu_err_vld_rm;  // RM 侧错误标志有效

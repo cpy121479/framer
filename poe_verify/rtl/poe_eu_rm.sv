@@ -6,10 +6,10 @@
 //   ① task 握手 → sa_core 的 in_valid 波前；
 //   ② POE CSR ↔ RISC-V CSR 的映射（**本版自定义**，真实 EU 到位后换成它的真实 CSR 口）：
 //        mstatus[15:0] ↔ POE 0x2  CCR              （读写）
-//        mcause[7:0]   → POE 0x9  TH_STAT          （写）
-//        mepc[7:0]     → POE 0xe  CUR_TS           （写；将来跳转落点）
-//        mtvec[31:0]   → POE 0x14 MUX_PTR 低 32 位 （写；将来 mux 指针）
-//        mcycle        ← POE 0x4  SYS_TS           （只读）
+//        mcause[7:0]   → POE 0xa  TH_STAT          （写）
+//        mepc[7:0]     → POE 0xf  CUR_TS           （写；将来跳转落点）
+//        mtvec[31:0]   → POE 0x16 MUX_PTR 低 32 位 （写；将来 mux 指针）
+//        mcycle        ← POE 0x5  SYS_TS           （只读）
 //      写侧只写"被 EU 改过的槽"，每拍最多一笔；CCR 不再由平台特判，走通用 POE CSR 写口。
 //   ③ 线程最后一条 task 完成后的下一拍，**EU 自己写 TH_STAT=DONE**
 //      （占位：真实设计里这条由微指令写，对平台呈现的接口形状不变）。
@@ -37,7 +37,7 @@ module poe_eu_rm #(
     input  logic [WIN_W-1:0] win_in,          // 64B 操作数窗口（MUX 组好）
     output logic [WIN_W-1:0] win_out,         // 处理后的 64B 窗口
     output logic             win_we,          // 结果有效
-    input  logic [575:0]     csr_snap,        // 该线程 POE CSR 全表快照（0x00..0x47）
+    input  logic [CSRB*8-1:0] csr_snap,       // 该线程 POE CSR 全表快照（0x00..0x59）
     output logic             csr_we,          // EU 发起的 POE CSR 写
     output logic [TID_W-1:0] csr_wtid,        // 写哪个线程
     output logic [6:0]       csr_waddr,       // POE CSR 地址（字节偏移）
@@ -100,9 +100,9 @@ module poe_eu_rm #(
     // ---- POE CSR → RISC-V CSR（读侧映射）----
     always_comb begin
         rmw_in_w         = '0;
-        rmw_in_w[111:96] = csr_snap[8*2 +: 16];        // mstatus[15:0] = POE 0x2 CCR
+        rmw_in_w[111:96] = csr_snap[8*int'(A_CCR) +: 16];         // mstatus[15:0] = POE 0x2 CCR
     end
-    assign ro_regs_w = {csr_snap[8*4 +: 32], 32'd0};   // mcycle = POE 0x4 SYS_TS
+    assign ro_regs_w = {csr_snap[8*int'(A_SYS_TS) +: 32], 32'd0}; // mcycle = POE 0x5 SYS_TS
 
     // ---- RISC-V CSR → POE CSR（写侧映射）：out_valid 拍，写"被 EU 改过"的槽 ----
     always_comb begin

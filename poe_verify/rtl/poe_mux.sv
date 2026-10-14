@@ -14,7 +14,7 @@
 //     ⑤ 回写落表之后，才向线程池回 task_done。
 //
 //   偏移来源（单条指令 [10] i 控制）：
-//     i=0 → CSR MUX_PTR（0x14，8×8bit 表）里按 src_ptr 低 3bit 选一个字节偏移
+//     i=0 → CSR MUX_PTR（0x16，8×8bit 表）里按 src_ptr 低 3bit 选一个字节偏移
 //     i=1 → [7:0] 直接当字节偏移
 //
 //   画像约束（由 MUX 指令表保证，本模块不做检查）：
@@ -26,7 +26,7 @@ import poe_pkg::*;
 module poe_mux #(
     parameter int TID_W = 6,             // 线程号位宽
     parameter int RF_W  = 2048,          // 每线程 RF 位宽（256B）
-    parameter int CSRB  = 72,            // 每线程 CSR 字节数
+    parameter int CSRB  = poe_pkg::CSRB, // 每线程 CSR 字节数
     parameter int N_INS = MUX_INS_N,     // 一行 MUX 指令条数（32）
     parameter int INS_W = MUX_INS_W,     // 单条指令位宽（11）
     parameter int AW    = MUX_AW,        // 行号位宽（= sub_pc）
@@ -83,7 +83,7 @@ module poe_mux #(
     // ---- 单条指令解码 ----
     function automatic logic [7:0] mux_off(input logic [INS_W-1:0] ins,
                                            input logic [CSRB*8-1:0] snap);
-        // i=0：从 CSR MUX_PTR（0x14）里按 src_ptr 低 3bit 选一个字节偏移；i=1：[7:0] 就是偏移
+// i=0：从 CSR MUX_PTR（0x16）里按 src_ptr 低 3bit 选一个字节偏移；i=1：[7:0] 就是偏移
         mux_off = ins[MI_I_LSB] ? ins[MI_PTR_LSB +: 8]
                                 : snap[8*int'(A_MUX_PTR) + 8*ins[MI_PTR_LSB +: 3] +: 8];
     endfunction

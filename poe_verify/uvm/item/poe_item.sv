@@ -32,7 +32,7 @@ class poe_ko_item extends uvm_sequence_item;
 endclass
 
 // 观测事件（monitor -> scoreboard）：**CSR 与 RF 各自独立成事件**（互不打包）
-//   EV_CSR：ts 边界的 CSR 全表快照（按字节 0x00..0x47，见 rtl/poe_thread_bank.sv 地址表）
+//   EV_CSR：ts 边界的 CSR 全表快照（按字节 0x00..0x59，见 rtl/poe_thread_bank.sv 地址表）
 //   EV_RF ：ts 边界的 RF 全表快照（POE_RF_W/32 槽）
 //   EV_KO ：线程出口 KO（EU 回刷结果）
 //   EV_ERR：EU 错误标志（随结果拍有效；DUT/RM 必须一致且期望为 0）
@@ -41,7 +41,7 @@ class poe_ev_item extends uvm_object;
     kind_e        kind;
     int           tid;
     int           ts;
-    bit [8*72-1:0] csr;      // EV_CSR 用：整份 CSR（0x00..0x47）
+    bit [8*POE_CSR_BYTES-1:0] csr;   // EV_CSR 用：整份 CSR（0x00..0x59）
     bit [POE_RF_W-1:0] rf;   // EV_RF 用：整份 RF 快照
     bit [383:0]    ko;       // EV_KO 用：48B 出口报文
     bit [3:0]      err;      // EV_ERR 用：EU 错误标志

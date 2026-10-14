@@ -139,7 +139,7 @@ module pool_smoke_tb;
     logic [4:0]       eu_cnt;
     logic             eu_done_r;
     logic             eu_last;            // 当前占用的这条 task 是不是线程最后一条
-    logic [7:0]       th_stat_q [N_THR];  // 模拟 CSR 0x9：EU 写完，池子读
+    logic [7:0]       th_stat_q [N_THR];  // 模拟 CSR 0xa：EU 写完，池子读
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin

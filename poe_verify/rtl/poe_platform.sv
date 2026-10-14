@@ -8,7 +8,7 @@
 //        |
 //        v
 //   poe_mux（RF 取数）：按 sub_pc 读 MUX 指令行 → 从该线程 256B RF 取数组 64B 窗口
-//        |                                   ^  读 MUX_PTR(CSR 0x14)
+//        |                                   ^  读 MUX_PTR(CSR 0x16)
 //        v                                   |
 //   poe_eu_dut / poe_eu_rm（共享一份）—— 64B 窗口进，64B 结果出 + CSR 写（CCR/TH_STAT…）
 //        |                                   |
@@ -66,7 +66,7 @@ module poe_platform #(
     output logic [TID_W-1:0] eu_err_tid,      // 错误属于哪个线程
     // ---- 两张表（观测/比对用，扁平化：按 tid 切片）----
     output logic [N_THR*RF_W-1:0] rf_flat,    // 每线程 RF：tid*RF_W +: RF_W
-    output logic [N_THR*72*8-1:0] csr_flat,   // 每线程 CSR 全表（按字节）：tid*576 +: 576
+    output logic [N_THR*CSRB*8-1:0] csr_flat, // 每线程 CSR 全表（按字节）：tid*CSRB*8 +: CSRB*8
     output logic [N_THR*32-1:0]   ccr_flat,   // 每线程 CCR（= EU 的 mstatus 低 16bit）：tid*32 +: 16
     output logic [N_THR*8-1:0]    th_stat_flat, // 每线程 TH_STAT：tid*8 +: 8
     output logic [N_THR*8-1:0]    cur_ts_flat   // 每线程 CUR_TS（程序指针）：tid*8 +: 8
@@ -118,7 +118,7 @@ module poe_platform #(
     logic [2:0]       eu_csr_ww;             //   写位宽码
     logic [383:0]     eu_csr_wdata;          //   写数据
 
-    logic [N_THR*72*8-1:0] csr_flat_w;       // CSR 全表（按字节），来自 poe_thread_bank
+    logic [N_THR*CSRB*8-1:0] csr_flat_w;     // CSR 全表（按字节），来自 poe_thread_bank
 
     // ---- 宏指令存储（只读 ROM；每线程一个组合读口）----
     poe_burst_imem #(
@@ -262,11 +262,11 @@ module poe_platform #(
     assign eu_err_tid = eu_done_tid;
     always_comb begin
         for (int t = 0; t < N_THR; t++) begin
-            // 小端：低字节在低地址（0x2 CCR / 0x9 TH_STAT / 0xe CUR_TS）
-            ccr_flat[t*32 +: 16]   = {csr_flat_w[(t*72 + 3)*8 +: 8],
-                                      csr_flat_w[(t*72 + 2)*8 +: 8]};
-            th_stat_flat[t*8 +: 8] = csr_flat_w[(t*72 + 9)*8 +: 8];
-            cur_ts_flat[t*8 +: 8]  = csr_flat_w[(t*72 + 14)*8 +: 8];
+            // 小端：低字节在低地址（0x2 CCR / 0xa TH_STAT / 0xf CUR_TS）
+            ccr_flat[t*32 +: 16]   = {csr_flat_w[(t*CSRB + int'(A_CCR) + 1)*8 +: 8],
+                                      csr_flat_w[(t*CSRB + int'(A_CCR))*8 +: 8]};
+            th_stat_flat[t*8 +: 8] = csr_flat_w[(t*CSRB + int'(A_TH_STAT))*8 +: 8];
+            cur_ts_flat[t*8 +: 8]  = csr_flat_w[(t*CSRB + int'(A_CUR_TS))*8 +: 8];
         end
     end
 

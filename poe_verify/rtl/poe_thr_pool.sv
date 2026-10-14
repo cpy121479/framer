@@ -147,7 +147,7 @@ module poe_thr_pool #(
                     t_csr_d[t] = {{(16-TS_W){1'b0}}, r_jt[t]};
                 end
                 T_DONE: begin
-                    // 线程结束由 EU 写 CSR 0x9 TH_STAT=DONE（占位：将来由微指令写）；
+                    // 线程结束由 EU 写 CSR 0xa TH_STAT=DONE（占位：将来由微指令写）；
                     // 池子只等它到，再发 thr_done 事件。
                     if (th_stat_flat[t*8 +: 8] == TH_DONE) t_rq[t] = RQ_EVENT;
                 end

@@ -2,13 +2,14 @@
 // 线程上下文存储：每线程一份 CSR + RF（平台侧；DUT/RM 的 EU 接口不动）
 //
 // CSR = **字节寻址寄存器组**（地址是字节偏移，每个寄存器占它自己的那几个字节）：
-//   0x0 16b ERR      0x2 16b CCR(EU 读写)   0x4 32b SYS_TS(系统时标)
-//   0x8  8b TH_ID    0x9  8b TH_STAT        0xa  1b O_TSK_EN   0xb  8b O_LABEL
-//   0xc 16b PC_INTER 0xe  8b CUR_TS         0xf  8b TSK_C      0x10 8b DMA_C
-//   0x11 2b LK_SET   0x12 16b LK_TAG        0x14 64b MUX_PTR   0x1c 352b CW_CMD
-//   总空间 0x00..0x47（72 字节）
-//   访问方式：{addr[6:0], 位宽码[2:0], data[383:0]}；位宽码 0=8b 1=16b 2=32b 3=64b 4=352b
-//   存储：0x00..0x1b 用字节数组；0x1c..0x47（CW 窗 = 8 项 × 44bit）单独用 352bit 寄存器，
+//   0x0  16b ERR        0x2  16b CCR       0x4   8b CCR_MASK   0x5  32b SYS_TS
+//   0x9   8b TH_ID      0xa   8b TH_STAT   0xb   2b O_TSK_SET  0xc   8b O_LABEL
+//   0xd  16b PC_INTER   0xf   8b CUR_TS    0x10  8b TSK_C      0x11  8b DMA_C
+//   0x12  8b MUX_C      0x13  2b LK_SET    0x14 16b LK_TAG     0x16 64b MUX_PTR
+//   0x1e 128b CW_MUX    0x2e 352b CW_CMD
+//   总空间 0x00..0x59（90 字节）
+//   访问方式：{addr[6:0], 位宽码[2:0], data[383:0]}；位宽码 0=8b 1=16b 2=32b 3=64b 4=352b 5=128b
+//   存储：0x00..0x2d 用字节数组；0x2e..0x59（CW 窗 = 8 项 × 44bit）单独用 352bit 寄存器，
 //         因为预发射口按 44bit 表项写、不是字节对齐的。
 //
 // RF = 每线程 **256B（2048bit = 64 槽 × 32bit，槽 0 在最高位）**。
@@ -25,7 +26,7 @@ module poe_thread_bank #(
     parameter int N_THR = 8,      // 线程数 = CSR/RF 表的份数
     parameter int TID_W = 3,      // 线程号位宽
     parameter int RF_W    = 2048, // 每线程 RF 位宽（256B = 64 槽 × 32bit）
-    parameter int CSRB  = 72      // 每线程 CSR 字节数（0x00..0x47）
+    parameter int CSRB  = 90      // 每线程 CSR 字节数（0x00..0x59）
 ) (
     input  logic             clk,             // 时钟
     input  logic             rst_n,           // 低有效异步复位
@@ -57,7 +58,7 @@ module poe_thread_bank #(
     input  logic [TID_W-1:0] rf_rd_tid,       // MUX 要读哪个线程的 RF
     output logic [RF_W-1:0]  rf_rd,           // 该线程整份 256B RF（组合读）
     output logic [N_THR*RF_W-1:0]   rf_flat,  // 全表 RF
-    output logic [N_THR*CSRB*8-1:0] csr_flat  // 全表 CSR（按字节：tid*576 +: 576）
+    output logic [N_THR*CSRB*8-1:0] csr_flat  // 全表 CSR（按字节：tid*CSRB*8 +: CSRB*8）
 );
     // ---- 地址常量（与文件头表一致；验证侧 poe_uvm_pkg 有同一份表）----
 
@@ -68,15 +69,16 @@ module poe_thread_bank #(
             3'd1:    nbytes = 2;    // 16bit
             3'd2:    nbytes = 4;    // 32bit
             3'd3:    nbytes = 8;    // 64bit
+            3'd5:    nbytes = 16;   // 128bit（CW_MUX）
             default: nbytes = 44;   // 352bit
         endcase
     endfunction
 
-    localparam int CWB = int'(A_CW_CMD);   // CW 窗起始字节（0x1c）：之前的字段用字节数组
-    // 字节数组保留 72 字节的地址口径（索引宽度和 7bit 地址一致），实际只写到 0x1b；
-    // 0x1c..0x47（CW 窗，44bit 表项非字节对齐）单独用下面的 cw 寄存器存。
+    localparam int CWB = int'(A_CW_CMD);   // CW 窗起始字节（0x2e）：之前的字段用字节数组
+    // 字节数组保留 90 字节的地址口径（索引宽度和 7bit 地址一致），实际只写到 0x2d；
+    // 0x2e..0x59（CW 窗，44bit 表项非字节对齐）单独用下面的 cw 寄存器存。
     logic [7:0]      csr [N_THR][CSRB];
-    logic [CW_N*CW_W-1:0] cw [N_THR];               // 0x1c..0x47：CW 窗（8×44bit）
+    logic [CW_N*CW_W-1:0] cw [N_THR];               // 0x2e..0x59：CW 窗（8×44bit）
     logic [RF_W-1:0] rf  [N_THR];
 
     // ---- MUX 读口：整份 RF 给 MUX，按字节切数由 MUX 自己做 ----
@@ -125,11 +127,14 @@ module poe_thread_bank #(
                 // 建线程：一拍成型（先全清，再写 4 个字段；同一变量上后写的 NBA 生效）
                 for (int b = 0; b < CWB; b++) csr[alloc_tid][b] <= 8'd0;
                 cw[alloc_tid] <= '0;                                     // CW 窗清零
-                csr[alloc_tid][A_TH_ID]        <= {{(8-TID_W){1'b0}}, alloc_tid};   // 0x8 TH_ID = tid
-                csr[alloc_tid][A_TH_STAT]      <= TH_RUN;               // 0x9 TH_STAT = RUN
-                csr[alloc_tid][A_PC_INTER]     <= alloc_base_ts[7:0];   // 0xc PC_INTER（小端）
+                csr[alloc_tid][A_TH_ID]        <= {{(8-TID_W){1'b0}}, alloc_tid};   // 0x9 TH_ID = tid
+                csr[alloc_tid][A_TH_STAT]      <= TH_RUN;               // 0xa TH_STAT = RUN
+                csr[alloc_tid][A_PC_INTER]     <= alloc_base_ts[7:0];   // 0xd PC_INTER（小端）
                 csr[alloc_tid][A_PC_INTER + 1] <= alloc_base_ts[15:8];
-                csr[alloc_tid][A_CUR_TS]       <= 8'd0;                 // 0xe CUR_TS = 0
+                csr[alloc_tid][A_CUR_TS]       <= 8'd0;                 // 0xf CUR_TS = 0
+                // 0x16 MUX_PTR 建线程默认值（8×8bit 指针表，非全 0）
+                for (int i = 0; i < 8; i++)
+                    csr[alloc_tid][int'(A_MUX_PTR) + i] <= MUX_PTR_DEF[i*8 +: 8];
                 rf[alloc_tid] <= '0;
             end
             // MUX 回写整份 RF：一个 task 一次（MUX 已经把没被指令覆盖的字节并好）

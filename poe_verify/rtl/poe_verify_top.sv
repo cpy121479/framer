@@ -60,7 +60,7 @@ module poe_verify_top #(
     output logic [N_THR*RF_W-1:0] rf_rm_flat, // RM 全表 RF
     output logic [N_THR*32-1:0]   ccr_dut_flat, // DUT 全表 CCR
     output logic [N_THR*32-1:0]   ccr_rm_flat,  // RM 全表 CCR
-    output logic [N_THR*72*8-1:0] csr_dut_flat  // DUT 全表 CSR（自检看 CW 窗，UVM 侧另有采样）
+    output logic [N_THR*CSRB*8-1:0] csr_dut_flat // DUT 全表 CSR（自检看 CW 窗，UVM 侧另有采样）
 );
     logic             ko_rdy_dut, ko_rdy_rm;   // 两侧各自 ready
     logic             out_vld_rm;              // RM 出口 KO 有效

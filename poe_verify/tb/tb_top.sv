@@ -38,14 +38,14 @@ module tb_top;
     int           chk_cnt, err_cnt, err_chk;
     logic [64*2048-1:0] rf_dut, rf_rm;
     logic [64*32-1:0]   ccr_dut, ccr_rm;
-    logic [64*72*8-1:0] csr_dut;      // DUT 全表 CSR（看 CW 窗 = 预发射口写的低 4 项）
+    logic [64*CSRB*8-1:0] csr_dut;    // DUT 全表 CSR（看 CW 窗 = 预发射口写的低 4 项）
     int           ko_cnt, done_cnt;   // 出口 KO / 线程结束计数
     // 预发射口写入的 4×44bit（表项 0 在最低 44bit）
     localparam logic [175:0] PRE_DATA0 = {44'h05555AAAA55, 44'h0FEDCBA9876,
                                           44'h0ABCDEF1234, 44'h0123456789A};
     localparam logic [175:0] PRE_DATA1 = {44'h0AAAA55555, 44'h03333333333,
                                           44'h0CCCCCCCCCC, 44'h0DEADBEEF01};
-    localparam int CW_BYTE = 28;      // CSR 0x1c = CW 窗起始字节
+    localparam int CW_BYTE = int'(A_CW_CMD);   // CSR 0x2e = CW 窗起始字节
 
     poe_verify_top #(
         .N_THR(64), .TID_W(6), .RF_W(2048), .TS_MAX(16), .TS_W(4), .N_BURST(8)
@@ -155,9 +155,9 @@ module tb_top;
         end
     end
 
-    // ---- CW 窗表项读口（自检用）：tid 线程的第 e 项（CSR 0x1c 起，每项 44bit）----
+    // ---- CW 窗表项读口（自检用）：tid 线程的第 e 项（CSR 0x2e 起，每项 44bit）----
     function automatic logic [43:0] cw_entry(input int tid, input int e);
-        cw_entry = csr_dut[tid*576 + CW_BYTE*8 + e*44 +: 44];
+        cw_entry = csr_dut[(tid*CSRB + CW_BYTE)*8 + e*44 +: 44];
     endfunction
 
     // ---- 发一个 KO（程序基址固定 ts 行 0；同拍带 csr 预发射口）----

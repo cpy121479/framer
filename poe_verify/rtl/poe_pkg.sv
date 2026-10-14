@@ -61,27 +61,33 @@ package poe_pkg;
                                       //   真实 EU 到位后改由 EU 回传的 jump/jump_target 驱动。
 
     // ---- ③ 线程 CSR：字节寻址寄存器组（每个寄存器占它自己的那几个字节）----
-    //   0x0 16b ERR     0x2 16b CCR(EU 读写)  0x4 32b SYS_TS   0x8 8b TH_ID
-    //   0x9  8b TH_STAT 0xa  1b O_TSK_EN      0xb  8b O_LABEL 0xc 16b PC_INTER
-    //   0xe  8b CUR_TS  0xf  8b TSK_C        0x10  8b DMA_C   0x11 2b LK_SET
-    //   0x12 16b LK_TAG 0x14 64b MUX_PTR     0x1c 352b CW_CMD
-    //   总空间 0x00..0x47（72 字节）
+    //   0x0  16b ERR        0x2  16b CCR       0x4   8b CCR_MASK   0x5  32b SYS_TS
+    //   0x9   8b TH_ID      0xa   8b TH_STAT   0xb   2b O_TSK_SET  0xc   8b O_LABEL
+    //   0xd  16b PC_INTER   0xf   8b CUR_TS    0x10  8b TSK_C      0x11  8b DMA_C
+    //   0x12  8b MUX_C      0x13  2b LK_SET    0x14 16b LK_TAG     0x16 64b MUX_PTR
+    //   0x1e 128b CW_MUX    0x2e 352b CW_CMD
+    //   总空间 0x00..0x59（90 字节）
+    //   注：CCR_MASK / MUX_C / CW_MUX 本版只做存储与观测（随 csr_flat 一起比对），
+    //       平台暂时不消费它们的语义（真 EU 到位后按需建模）。
     localparam logic [6:0] A_ERR      = 7'h00;   // 16b 错误告警
-    localparam logic [6:0] A_CCR      = 7'h02;   // 16b EU 读写（= mstatus 低 16bit）
-    localparam logic [6:0] A_SYS_TS   = 7'h04;   // 32b 系统时标（EU 当 mcycle 读）
-    localparam logic [6:0] A_TH_ID    = 7'h08;   //  8b 线程 ID
-    localparam logic [6:0] A_TH_STAT  = 7'h09;   //  8b 线程状态（3=DONE 即线程结束）
-    localparam logic [6:0] A_O_TSK_EN = 7'h0a;   //  1b o 窗操作标签
-    localparam logic [6:0] A_O_LABEL  = 7'h0b;   //  8b o 窗位置标签
-    localparam logic [6:0] A_PC_INTER = 7'h0c;   // 16b 当前 PC
-    localparam logic [6:0] A_CUR_TS   = 7'h0e;   //  8b 当前 ts（平台推进）
-    localparam logic [6:0] A_TSK_C    = 7'h0f;   //  8b i/v task 控制（与 tsk_msk 相与）
-    localparam logic [6:0] A_DMA_C    = 7'h10;   //  8b ctask 控制（与 tsk_msk 相与）
-    localparam logic [6:0] A_LK_SET   = 7'h11;   //  2b 锁操作命令
-    localparam logic [6:0] A_LK_TAG   = 7'h12;   // 16b 锁 tag
-    localparam logic [6:0] A_MUX_PTR  = 7'h14;   // 64b MUX 指针
-    localparam logic [6:0] A_CW_CMD   = 7'h1c;   // 352b C 窗访问地址
-    localparam int         CSRB       = 72;      // per-thread CSR 字节数
+    localparam logic [6:0] A_CCR      = 7'h02;   // 16b 条件寄存器（EU 读写；= mstatus 低 16bit）
+    localparam logic [6:0] A_CCR_MASK = 7'h04;   //  8b 条件寄存器刷新使能
+    localparam logic [6:0] A_SYS_TS   = 7'h05;   // 32b 系统时标（EU 当 mcycle 读）
+    localparam logic [6:0] A_TH_ID    = 7'h09;   //  8b 线程 ID
+    localparam logic [6:0] A_TH_STAT  = 7'h0a;   //  8b 线程状态（3=DONE 即线程结束）
+    localparam logic [6:0] A_O_TSK_SET= 7'h0b;   //  2b o 窗操作标签
+    localparam logic [6:0] A_O_LABEL  = 7'h0c;   //  8b o 窗位置标签
+    localparam logic [6:0] A_PC_INTER = 7'h0d;   // 16b 当前 PC 值
+    localparam logic [6:0] A_CUR_TS   = 7'h0f;   //  8b 当前 TS
+    localparam logic [6:0] A_TSK_C    = 7'h10;   //  8b i/v task 控制（与 tsk_msk 相与）
+    localparam logic [6:0] A_DMA_C    = 7'h11;   //  8b ctask 控制（与 tsk_msk 相与）
+    localparam logic [6:0] A_MUX_C    = 7'h12;   //  8b MUX 指针刷新使能
+    localparam logic [6:0] A_LK_SET   = 7'h13;   //  2b 锁操作命令
+    localparam logic [6:0] A_LK_TAG   = 7'h14;   // 16b 锁 tag
+    localparam logic [6:0] A_MUX_PTR  = 7'h16;   // 64b MUX 指针（8×8bit 表）
+    localparam logic [6:0] A_CW_MUX   = 7'h1e;   // 128b CW MUX（4 套 × 32bit）
+    localparam logic [6:0] A_CW_CMD   = 7'h2e;   // 352b C 窗访问地址（8×44bit）
+    localparam int         CSRB       = 90;      // per-thread CSR 字节数（0x00..0x59）
     localparam int         CW_W       = 44;      // C 窗表项位宽（CW_CMD = 8 项 × 44bit = 352bit）
     localparam int         CW_N       = 8;       // C 窗表项数
     localparam int         PRE_N      = 4;       // 预发射口一次预写的表项数（CW 窗低 4 项）
@@ -90,7 +96,7 @@ package poe_pkg;
     //   一行 MUX 指令 = 32 条 × 11bit = 352bit；第 k 条（fetcher k）固定对应 64B 窗口的
     //   一个 2B 槽，且 **fetcher 0 = 最高 16bit**（与 mux_shift_conv 规格一致）。
     //   单条指令（11bit）：
-    //     [10]    i       0 = 偏移从 CSR MUX_PTR（0x14，8×8bit 表）里按 src_ptr 低 3bit 选
+    //     [10]    i       0 = 偏移从 CSR MUX_PTR（0x16，8×8bit 表）里按 src_ptr 低 3bit 选
     //                     1 = [7:0] 直接就是 RF 字节偏移
     //     [9:8]   mvld    从该偏移取几个字节：0/1/2（不是 +1）
     //     [7:0]   src_ptr i=0 时选 MUX_PTR 表项；i=1 时是偏移本身
@@ -111,10 +117,12 @@ package poe_pkg;
     localparam logic [2:0] W32  = 3'd2;   // 32bit
     localparam logic [2:0] W64  = 3'd3;   // 64bit
     localparam logic [2:0] W352 = 3'd4;   // 352bit
+    localparam logic [2:0] W128 = 3'd5;   // 128bit（CW_MUX）
 
-    // 线程状态取值（写 CSR 0x9 TH_STAT）
+    // 线程状态取值（写 CSR 0xa TH_STAT）
     localparam logic [7:0] TH_RUN  = 8'h01;   // 建线程后
     localparam logic [7:0] TH_DONE = 8'h03;   // 线程结束
+    localparam logic [63:0] MUX_PTR_DEF = 64'h1C18_1410_0C08_0400;  // MUX_PTR 默认值：ptr[k]=4k（非全 0）
 
     // ---- ④ 48B KO 报文：平台只解析行1 公共表头 + 行2 的 POE_HEAD ----
     //   行1 = [383:320]：{DA, DP, SA, SP, TYPE, {PRI, SN[12:8]}, SN[7:0], B/E/LBO}

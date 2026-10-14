@@ -47,16 +47,17 @@ TESTNAME=poe_base_test ./run_uvm.sh     # UVM：2 个 KO，(tid,ts) 配对比对
   `poe_mux` 按 MUX 指令从 RF 取数组出 **64B 操作数窗口**（`WIN_W=512`）给 EU，
   EU 结果再按同一行指令反向散射回 RF。示例 EU 模型是 128B 口，壳里把窗口放到高半区；
   接真实 64B EU 时把这段映射删掉即可。
-- **CSR**：按字节寻址 `0x00..0x47`；`0x2` CCR（EU 读写）、`0x9` TH_STAT（3=DONE 结束线程）、
-  `0xe` CUR_TS、`0x1c` 352bit CW 窗（8×44bit）。
+- **CSR**：按字节寻址 `0x00..0x59`（每线程 90 字节）。`0x2` CCR（EU 读写）、`0x4` CCR_MASK、
+  `0x5` SYS_TS、`0x9` TH_ID、`0xa` TH_STAT（3=DONE 结束线程）、`0xf` CUR_TS、`0x12` MUX_C、
+  `0x16` MUX_PTR（64bit）、`0x1e` CW_MUX（4×32bit）、`0x2e` CW_CMD（352bit = 8×44bit）。
 - **入口**：KO 48B + csr 预发射口（`1bit vld` + 线程号 + `4bit` 表项掩码 + `4×44bit` 数据），
   建线程拍预写 CW 窗低 4 项。
-- **退出**：出口 KO（DA/SA 对调）；线程结束写在 CSR `0x9 TH_STAT=DONE`。
+- **退出**：出口 KO（DA/SA 对调）；线程结束写在 CSR `0xa TH_STAT=DONE`。
 - **两级存储**：宏指令存储是只读 ROM（模块内部 initial 拼镜像，无写口）；
   微指令存储（EU 内）与 MUX 指令存储都需要 TB/test 预载。
 - **MUX（RF 取数）**：一行 32 条 × 11bit，按 `sub_pc` 索引；**fetcher 0 = 窗口最高 16bit**
   （与 `mux_shift_conv` 规格一致），每条 `mvld`=0/1/2 字节、槽内低字节先。偏移 `i=0` 时从
-  CSR `MUX_PTR`(0x14) 按 `src_ptr` 低 3bit 选，`i=1` 时 `[7:0]` 即字节偏移；
+  CSR `MUX_PTR`(0x16) 按 `src_ptr` 低 3bit 选，`i=1` 时 `[7:0]` 即字节偏移；
   EU 结果按同一行指令反向散射回 RF。
 - **CSR 所有权**：建线程初始化（含 `MUX_PTR` 默认值、CW 窗预发射）由平台写；
   运行期 `CCR`/`MUX_PTR` 由 EU 走通用 CSR 写口写；`TH_STAT=DONE` 由 EU 在末条 task 完成时写；

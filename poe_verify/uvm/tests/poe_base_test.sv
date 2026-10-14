@@ -109,7 +109,8 @@ class poe_base_test extends uvm_test;
         for (int i = 0; i < int'(seq.n_ko); i++)
             for (int e = 0; e < 4; e++)
                 if (seq.pre_strb_q[i][e])
-                    if (poe_uvm_pkg::g_vif.csr_dut[(int'(seq.pre_thid_q[i])*72 + 28)*8 + e*44 +: 44]
+                    if (poe_uvm_pkg::g_vif.csr_dut[(int'(seq.pre_thid_q[i])*POE_CSR_BYTES
+                                                    + int'(A_CW_CMD))*8 + e*44 +: 44]
                         !== seq.pre_data_q[i][e*44 +: 44])
                         `uvm_error("PRE_CW", $sformatf("tid=%0d CW 表项%0d 不符",
                                    seq.pre_thid_q[i], e))

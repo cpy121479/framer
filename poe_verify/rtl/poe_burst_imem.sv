@@ -32,7 +32,7 @@ module poe_burst_imem #(
 
     // ---- 程序镜像：**内部初始化**（不依赖外部 hex 文件）----
     //   一行 = 一个 ts；字段按 poe_pkg 的 TD_*/BF_* 拼，改程序只改这里。
-    //   st=1 标在每条 ts 的第一条 burst 上；线程结束由 CSR 0x9 TH_STAT=DONE 指示。
+//   st=1 标在每条 ts 的第一条 burst 上；线程结束由 CSR 0xa TH_STAT=DONE 指示。
     initial begin
         for (int i = 0; i < TS_MAX; i++) mem[i] = '0;   // 未写到的行 = 空 ts
 
@@ -57,7 +57,7 @@ module poe_burst_imem #(
 
         // ts2：故意留空（全 0）——演示"被跳过去"，本程序不会执行到
 
-        // ts3：跳跃落点，末 ts（线程结束由 CSR 0x9 TH_STAT=DONE 指示）
+        // ts3：跳跃落点，末 ts（线程结束由 CSR 0xa TH_STAT=DONE 指示）
         //   复用 sub_pc 0/1 的微指令行，不需要额外微指令画像
         mem[3][TD_B_LSB + 0*BURST_W +: BURST_W] = burst_iv_pack(
             1'b1, 1'b0, 1'b0, 8'hFF, 1'b0, 2'b01, 3'd0, 3'd1, 8'd0);

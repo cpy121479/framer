@@ -1,6 +1,6 @@
 // ============================================================================
 // scoreboard：DUT / RM 两侧事件**按 (tid, ts) 配对**后比对
-//   · ts 边界：CSR 全表（0x00..0x47）+ RF 全表（256B = 64 槽）各自配对
+//   · ts 边界：CSR 全表（0x00..0x59）+ RF 全表（256B = 64 槽）各自配对
 //   · 出口 KO：按 tid 配对（一个线程一条），逐位比 384bit 报文
 //   · EU 错误标志：两侧各自检查（本平台示例 EU 期望恒 0；两侧事件数也必须相等）
 //   · 配对不依赖到达顺序：先到的一侧暂存，另一侧到达时当场比，再清表
@@ -16,8 +16,8 @@ class poe_scoreboard extends uvm_scoreboard;
     uvm_tlm_analysis_fifo #(poe_ev_item) err_dut_fifo, err_rm_fifo;
 
     // key = tid*TS_MAX + ts：同一 (tid, ts) 的 DUT/RM 事件成对比
-    bit [8*72-1:0] csr_dut_tab [N_THR_MAX*TS_MAX];
-    bit [8*72-1:0] csr_rm_tab  [N_THR_MAX*TS_MAX];
+    bit [8*POE_CSR_BYTES-1:0] csr_dut_tab [N_THR_MAX*TS_MAX];
+    bit [8*POE_CSR_BYTES-1:0] csr_rm_tab  [N_THR_MAX*TS_MAX];
     bit            csr_dut_vld [N_THR_MAX*TS_MAX];
     bit            csr_rm_vld  [N_THR_MAX*TS_MAX];
     bit [POE_RF_W-1:0] rf_dut_tab [N_THR_MAX*TS_MAX];
