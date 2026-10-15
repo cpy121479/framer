@@ -92,26 +92,13 @@ module poe_thread_bank #(
         if (!rst_n) sys_ts <= 32'd0;
         else        sys_ts <= sys_ts + 32'd1;
     end
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            for (int t = 0; t < N_THR; t++) begin
-                csr[t][A_SYS_TS]     <= 8'd0;
-                csr[t][A_SYS_TS + 1] <= 8'd0;
-                csr[t][A_SYS_TS + 2] <= 8'd0;
-                csr[t][A_SYS_TS + 3] <= 8'd0;
-            end
-        end else begin
-            for (int t = 0; t < N_THR; t++) begin
-                // 小端：低字节在低地址
-                csr[t][A_SYS_TS]     <= sys_ts[7:0];
-                csr[t][A_SYS_TS + 1] <= sys_ts[15:8];
-                csr[t][A_SYS_TS + 2] <= sys_ts[23:16];
-                csr[t][A_SYS_TS + 3] <= sys_ts[31:24];
-            end
-        end
-    end
 
-    // ---- 四个写来源：① 申请清零+初始化 ② EU 的 RF 回刷 ③ EU 的 CSR 写 ④ 平台线程侧 CSR 写 ----
+    // ---- **csr/cw/rf 的唯一写者**（所有写来源合在一个 always_ff 里）----
+    //   写来源（按本块内顺序，后面的优先级更高）：
+    //     ① SYS_TS 每拍刷新  ② 申请清零+初始化  ③ EU 的 RF 回刷
+    //     ④ 平台线程侧 CSR 写 ⑤ EU 侧通用 CSR 写 ⑥ 预发射口预写 CW 低 4 项
+    //   注意：VCS/Xcelium 不允许同一个变量被两个 always 块写，所以 SYS_TS 刷新
+    //   也必须放在这里（Verilator 容忍但别的工具会报 left-hand 多进程写）。
     //   EU 的 RF 回刷必须 done 拍直接落表（契约见 poe_eu_rm 文件头）：
     //   线程池在 done 的下一拍就可能发同线程的下一条 task，多一级流水会读到旧 RF。
     //   CSR 写（CCR 等）走同一套字节/位宽逻辑，CCR 只是地址 0x2 的一个表项，不再特判。
@@ -123,6 +110,13 @@ module poe_thread_bank #(
                 rf[t] <= '0;
             end
         end else begin
+            // ① SYS_TS：每拍把所有线程的 0x5..0x8 刷成系统时标（小端）
+            for (int t = 0; t < N_THR; t++) begin
+                csr[t][int'(A_SYS_TS)]     <= sys_ts[7:0];
+                csr[t][int'(A_SYS_TS) + 1] <= sys_ts[15:8];
+                csr[t][int'(A_SYS_TS) + 2] <= sys_ts[23:16];
+                csr[t][int'(A_SYS_TS) + 3] <= sys_ts[31:24];
+            end
             if (alloc) begin
                 // 建线程：一拍成型（先全清，再写 4 个字段；同一变量上后写的 NBA 生效）
                 for (int b = 0; b < CWB; b++) csr[alloc_tid][b] <= 8'd0;
