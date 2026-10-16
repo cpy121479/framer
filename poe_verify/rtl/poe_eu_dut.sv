@@ -10,12 +10,13 @@
 //   ① task 握手 → EU 波前；
 //   ② POE CSR ↔ EU 的 CSR 映射（本版是"RISC-V CSR ↔ POE CSR"的自定义映射，
 //      真实 EU 到位后改成它的真实 CSR 口）：
-//        mstatus[15:0] ↔ POE 0x2  CCR              （读写）
+//        mstatus[15:0] ↔ ccr_in / ccr_out          （2B CCR：读口由 MUX 按 MXCC 从 32B CCR 表选，
+//                                                    写口交 DMUX 回填 32B 表并镜像 CSR 0x2）
 //        mcause[7:0]   → POE 0xa  TH_STAT          （写）
 //        mepc[7:0]     → POE 0xf  CUR_TS           （写；将来跳转落点）
 //        mtvec[31:0]   → POE 0x16 MUX_PTR 低 32 位 （写；将来 mux 指针）
 //        mcycle        ← POE 0x5  SYS_TS           （只读）
-//      写侧只写"被 EU 改过的槽"，每拍最多一笔；CCR 不再由平台特判，走通用 POE CSR 写口。
+//      写侧只写"被 EU 改过的槽"，每拍最多一笔；CCR 走 ccr_out（不占这个 CSR 写口）。
 //   ③ 线程最后一条 task 完成后的下一拍，**EU 自己写 TH_STAT=DONE**
 //      （占位：真实设计里这条由微指令写，对平台呈现的接口形状不变）。
 //
@@ -39,6 +40,8 @@ module poe_eu_dut #(
     input  logic [WIN_W-1:0] win_in,          // 64B 操作数窗口（MUX 组好）
     output logic [WIN_W-1:0] win_out,         // 处理后的 64B 窗口
     output logic             win_we,          // 结果有效
+    input  logic [15:0]      ccr_in,          // 本 task 的 2B CSR（CCR）：MUX 按 MXCC 从 32B CCR 表选出
+    output logic [15:0]      ccr_out,         // 本 task 写回的 2B CSR（CCR）：DMUX 负责回填 32B 表
     input  logic [CSRB*8-1:0] csr_snap,       // 该线程 POE CSR 全表快照（0x00..0x59）
     output logic             csr_we,          // EU 发起的 POE CSR 写
     output logic [TID_W-1:0] csr_wtid,        // 写哪个线程
@@ -102,15 +105,16 @@ module poe_eu_dut #(
     // ---- POE CSR → RISC-V CSR（读侧映射）----
     always_comb begin
         rmw_in_w         = '0;
-        rmw_in_w[111:96] = csr_snap[8*int'(A_CCR) +: 16];         // mstatus[15:0] = POE 0x2 CCR
+        rmw_in_w[111:96] = ccr_in;                                // mstatus[15:0] = 本 task 的 2B CCR
     end
     assign ro_regs_w = {csr_snap[8*int'(A_SYS_TS) +: 32], 32'd0}; // mcycle = POE 0x5 SYS_TS
+    assign ccr_out   = rmw_out_w[111:96];                         // 结果拍有效（与 win_out 同拍）
 
     // ---- RISC-V CSR → POE CSR（写侧映射）：out_valid 拍，写"被 EU 改过"的槽 ----
     always_comb begin
         csr_we    = 1'b0;
-        csr_waddr = A_CCR;
-        csr_ww    = W16;
+        csr_waddr = A_TH_STAT;
+        csr_ww    = W8;
         csr_wdata = '0;
         if (last_done) begin                                  // 线程结束：EU 自己写 TH_STAT=DONE
             csr_we    = 1'b1;
@@ -118,12 +122,8 @@ module poe_eu_dut #(
             csr_ww    = W8;
             csr_wdata = {376'd0, TH_DONE};
         end else if (out_valid) begin
-            if (rmw_out_w[111:96] !== rmw_in_q[111:96]) begin // mstatus → CCR
-                csr_we    = 1'b1;
-                csr_waddr = A_CCR;
-                csr_ww    = W16;
-                csr_wdata = {368'd0, rmw_out_w[111:96]};
-            end else if (rmw_out_w[31:0] !== rmw_in_q[31:0]) begin // mcause → TH_STAT
+            // 注：CCR（mstatus 低 16bit）不在这里写 —— 走 ccr_out → DMUX → 32B CCR 表 + CSR 0x2 镜像
+            if (rmw_out_w[31:0] !== rmw_in_q[31:0]) begin     // mcause → TH_STAT
                 csr_we    = 1'b1;
                 csr_waddr = A_TH_STAT;
                 csr_ww    = W8;

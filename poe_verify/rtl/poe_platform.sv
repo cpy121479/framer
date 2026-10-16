@@ -7,14 +7,17 @@
 //   poe_thr_pool（多线程池）：建线程 → 按 CUR_TS 取 ts 行 → 逐条 burst 发 task(sub_pc)
 //        |
 //        v
-//   poe_mux（RF 取数）：按 sub_pc 读 MUX 指令行 → 从该线程 256B RF 取数组 64B 窗口
-//        |                                   ^  读 MUX_PTR(CSR 0x16)
+//   poe_mux（MUX 级）：按 sub_pc 读 MUX 指令行 → 从该线程 256B RF 取数 + MXS 移位
+//        |                                   ^  读 MUX_PTR(CSR 0x16) / CCR 表(MXCC)
 //        v                                   |
-//   poe_eu_dut / poe_eu_rm（共享一份）—— 64B 窗口进，64B 结果出 + CSR 写（CCR/TH_STAT…）
-//        |                                   |
-//        +--> 结果按同一行 MUX 指令反向散射回 RF（bank）
-//        |
-//        +-- 出口 KO（DA/SA 对调）+ ts_done/thr_done 事件 + 两张表快照（供比对）
+//   poe_eu_dut / poe_eu_rm（共享一份）—— 64B 窗口 + 2B CCR 进，64B 结果 + 2B CCR 出
+//        |                                   |        （TH_STAT/CUR_TS 等仍走 CSR 写口）
+//        v                                   |
+//   poe_dmux（DMUX 级）：逆 MXS + 逆取数回填 RF（掩码保护）/ 回填 32B CCR 表 / 累积 O 窗
+//        |                       |           |
+//        |                       |           +-- 线程结束 → 出口 KO 直出 = {O 窗 32B, 入口 KO 低 16B}
+//        |                       +-------------- 每个 task 一次回填（bank）
+//        +-- ts_done/thr_done 事件 + 两张表快照（供比对）
 //
 // IS_RM=0 → 用 poe_eu_dut（真实 EU 的替换点）；IS_RM=1 → 用 poe_eu_rm（参考模型）
 // 两侧完全对称：同一个 KO 进两次，各自跑自己的线程/CSR/RF，谁也看不到谁。
@@ -48,10 +51,10 @@ module poe_platform #(
     // ---- 预载：MUX 指令存储 ----
     input  logic             mux_imem_we,     // MUX 指令存储写使能
     input  logic [MUX_AW-1:0] mux_imem_waddr, // 行号 = sub_pc
-    input  logic [MUX_ROW_W-1:0] mux_imem_wdata, // 一行 = 32 条 × 11bit
-    // ---- 出口 KO（线程结束后由回刷逻辑给出）----
+    input  logic [MUX_ROW_W-1:0] mux_imem_wdata, // 一行 = 五组字段（见 poe_pkg 的 ⑤ 节），1280bit
+    // ---- 出口 KO（由 DMUX 在末条 task 的结果拍再生并直出）----
     output logic             out_vld,         // 出口 KO 有效（一拍）
-    output logic [383:0]     out_data,        // 出口 48B 报文
+    output logic [383:0]     out_data,        // 出口 48B 报文 = {O 窗 32B, 入口 KO 低 16B}
     output logic [TID_W-1:0] out_tid,         // 出口 KO 属于哪个线程
     // ---- 事件（供 UVM monitor / checker 采样）----
     output logic             ts_done_vld,     // 一个 ts 的 burst 全部完成（校验点，一拍）
@@ -97,26 +100,40 @@ module poe_platform #(
     logic [MUX_ROW_W-1:0] mux_row;           // MUX 指令行
     logic [TID_W-1:0]     mux_rf_rd_tid;     // MUX 要读哪个线程的 RF
     logic [RF_W-1:0]      mux_rf_rd;         // 该线程整份 RF
-    logic                 mux_rf_we;         // MUX 回写 RF（一拍）
-    logic [TID_W-1:0]     mux_rf_tid;        // 回写哪个线程
-    logic [RF_W-1:0]      mux_rf_wdata;      // 回写后的整份 RF
+    logic [TID_W-1:0]     mux_ccr_rtid;      // MUX 要读哪个线程的 CCR 表
+    logic [CCR_W-1:0]     mux_ccr_rd;        // 该线程整份 32B CCR 表
     logic [TID_W-1:0]     mux_csr_rtid;      // MUX 要读哪个线程的 CSR
     logic [WIN_W-1:0]     mux_win_data;      // 组好的 64B 窗口
+    logic [15:0]          mux_win_ccr;       // MXCC 选出的 2B CSR（CCR）
     logic                 mux_win_vld;       // 窗口有效
     logic [TID_W-1:0]     mux_win_tid;       // 窗口属于哪个线程
     logic [3:0]           mux_win_sub_pc;    // 微指令行号
     logic                 mux_win_last;      // 本 task 是线程最后一条
     logic                 mux_win_rdy;       // EU 能否收窗口
+    logic [TID_W-1:0]     mux_ctx_tid;       // 当前 task 上下文：线程号
+    logic                 mux_ctx_last;      // 当前 task 上下文：是否线程最后一条
 
     // ---- EU ----
     logic             eu_done;               // EU 结果有效
     logic [TID_W-1:0] eu_done_tid;           // 结果属于哪个线程
     logic [WIN_W-1:0] eu_win_out;            // EU 处理后的 64B 窗口
+    logic [15:0]      eu_ccr_out;            // EU 写回的 2B CSR（CCR）
     logic             eu_csr_we;             // EU 侧 POE CSR 写（通用口）
     logic [TID_W-1:0] eu_csr_wtid;           //   写哪个线程
     logic [6:0]       eu_csr_waddr;          //   写地址
     logic [2:0]       eu_csr_ww;             //   写位宽码
     logic [383:0]     eu_csr_wdata;          //   写数据
+
+    // ---- DMUX ----
+    logic                 dmux_rf_we;        // DMUX 回填 RF（一拍，一个 task 一次）
+    logic [TID_W-1:0]     dmux_rf_tid;       //   回填哪个线程
+    logic [RF_W-1:0]      dmux_rf_wdata;     //   回填后的整份 RF
+    logic                 dmux_ccr_we;       // DMUX 回填 2B CCR（+ 镜像 CSR 0x2）
+    logic [TID_W-1:0]     dmux_ccr_tid;      //   回填哪个线程
+    logic [4:0]           dmux_ccr_a0;       //   高字节落点
+    logic [4:0]           dmux_ccr_a1;       //   低字节落点
+    logic [15:0]          dmux_ccr_wdata;    //   要写回的 2B
+    logic [N_THR*KO_LO_W-1:0] ko_lo_flat;    // 入口 KO 低 16B（每线程一份，供 DMUX 再生出口 KO）
 
     logic [N_THR*CSRB*8-1:0] csr_flat_w;     // CSR 全表（按字节），来自 poe_thread_bank
 
@@ -157,13 +174,13 @@ module poe_platform #(
         .task_sub_pc     (task_sub_pc),
         .task_last       (task_last),
         .task_rdy        (task_rdy),          // 由 MUX 给
-        .eu_done         (mux_task_done),     // 一条 task 真正做完（RF 已回写）
+        .eu_done         (mux_task_done),     // 一条 task 真正做完（RF/CCR 已回填）
         .eu_done_tid     (mux_task_done_tid),
         .th_stat_flat    (th_stat_flat),      // 线程结束由 EU 写 TH_STAT，池子只读
-        .out_vld         (out_vld),
-        .out_data        (out_data),
-        .out_tid         (out_tid),
-        .out_rdy         (1'b1),   // 出口 KO 当拍交给 monitor/checker，视为已被取走
+        .ko_sent_vld     (out_vld),           // 出口 KO 已由 DMUX 直出
+        .ko_sent_tid     (out_tid),
+        .out_rdy         (1'b1),              // 出口 KO 当拍交给 monitor/checker，视为已被取走
+        .ko_lo_flat      (ko_lo_flat),        // 入口 KO 低 16B（出口 KO 原样保持那部分）
         .ts_done_vld     (ts_done_vld),
         .ts_done_tid     (ts_done_tid),
         .ts_done_idx     (ts_done_idx),
@@ -181,9 +198,16 @@ module poe_platform #(
         .alloc(alloc),
         .alloc_tid(alloc_tid),
         .alloc_base_ts(alloc_base_ts),
-        .mux_rf_we(mux_rf_we),          // MUX 回写整份 RF
-        .mux_rf_tid(mux_rf_tid),
-        .mux_rf_wdata(mux_rf_wdata),
+        .dmux_rf_we(dmux_rf_we),        // DMUX 回填整份 RF（一个 task 一次）
+        .dmux_rf_tid(dmux_rf_tid),
+        .dmux_rf_wdata(dmux_rf_wdata),
+        .ccr_rtid(mux_ccr_rtid),        // MUX 读 CCR 表（MXCC 选 2B）
+        .ccr_rd(mux_ccr_rd),
+        .ccr_we(dmux_ccr_we),           // DMUX 回填 2B CCR（+ 镜像 CSR 0x2）
+        .ccr_wtid(dmux_ccr_tid),
+        .ccr_a0(dmux_ccr_a0),
+        .ccr_a1(dmux_ccr_a1),
+        .ccr_wdata(dmux_ccr_wdata),
         .eu_csr_we(eu_csr_we),          // EU 侧 CSR 写（CCR/MUX_PTR/TH_STAT 都走这里）
         .eu_csr_wtid(eu_csr_wtid),
         .eu_csr_waddr(eu_csr_waddr),
@@ -198,10 +222,6 @@ module poe_platform #(
         .csr_waddr(csr_waddr),
         .csr_ww(csr_ww),
         .csr_wdata(csr_wdata),
-        .csr_rtid('0),
-        .csr_raddr(7'd0),
-        .csr_rw(3'd0),
-        .csr_rdata(),
         .rf_rd_tid(mux_rf_rd_tid),      // MUX 读整份 RF
         .rf_rd(mux_rf_rd),
         .rf_flat(rf_flat),
@@ -222,7 +242,7 @@ module poe_platform #(
         .wdata   (mux_imem_wdata)
     );
 
-    // ---- MUX：RF 取数 + 反向散射回写 ----
+    // ---- MUX：RF 取数 + MXS 移位（回填在 DMUX，不在本模块）----
     poe_mux #(
         .TID_W(TID_W), .RF_W(RF_W), .WIN_W(WIN_W)
     ) u_mux (
@@ -237,9 +257,8 @@ module poe_platform #(
         .mux_row       (mux_row),
         .rf_rd_tid     (mux_rf_rd_tid),
         .rf_rd         (mux_rf_rd),
-        .mux_rf_we     (mux_rf_we),
-        .mux_rf_tid    (mux_rf_tid),
-        .mux_rf_wdata  (mux_rf_wdata),
+        .ccr_rtid      (mux_ccr_rtid),
+        .ccr_rd        (mux_ccr_rd),
         .csr_rtid      (mux_csr_rtid),
         .csr_snap      (csr_flat_w[mux_csr_rtid*CSRB*8 +: CSRB*8]),
         .win_vld       (mux_win_vld),
@@ -247,12 +266,45 @@ module poe_platform #(
         .win_sub_pc    (mux_win_sub_pc),
         .win_last      (mux_win_last),
         .win_data      (mux_win_data),
+        .win_ccr       (mux_win_ccr),
         .win_rdy       (mux_win_rdy),
         .eu_done       (eu_done),
         .eu_done_tid   (eu_done_tid),
-        .win_out       (eu_win_out),
+        .ctx_tid       (mux_ctx_tid),
+        .ctx_last      (mux_ctx_last),
         .task_done     (mux_task_done),
         .task_done_tid (mux_task_done_tid)
+    );
+
+    // ---- DMUX：逆 MXS + 逆取数回填 RF / 回填 CCR 表 / 累积 O 窗 + 线程结束再生出口 KO ----
+    poe_dmux #(
+        .TID_W(TID_W), .N_THR(N_THR), .RF_W(RF_W), .WIN_W(WIN_W)
+    ) u_dmux (
+        .clk        (clk),
+        .rst_n      (rst_n),
+        .alloc      (alloc),                    // 建线程：清该线程 O 窗
+        .alloc_tid  (alloc_tid),
+        .eu_done    (eu_done),                  // 当前 task 的 EU 结果拍
+        .eu_done_tid(eu_done_tid),
+        .ctx_tid    (mux_ctx_tid),              // 当前 task 上下文（来自 MUX）
+        .ctx_last   (mux_ctx_last),
+        .row        (mux_row),                  // 同一行 MUX 指令（按 ctx_pc 读出）
+        .win_out    (eu_win_out),               // EU 处理后的 64B 窗
+        .ccr_out    (eu_ccr_out),               // EU 写回的 2B CCR
+        .rf_rd      (mux_rf_rd),                // 该线程 RF 原值（掩码保护）
+        .csr_snap   (csr_flat_w[mux_ctx_tid*CSRB*8 +: CSRB*8]),  // 读 MUX_PTR
+        .ko_lo      (ko_lo_flat[mux_ctx_tid*KO_LO_W +: KO_LO_W]),// 入口 KO 低 16B
+        .rf_we      (dmux_rf_we),
+        .rf_tid     (dmux_rf_tid),
+        .rf_wdata   (dmux_rf_wdata),
+        .ccr_we     (dmux_ccr_we),
+        .ccr_tid    (dmux_ccr_tid),
+        .ccr_a0     (dmux_ccr_a0),
+        .ccr_a1     (dmux_ccr_a1),
+        .ccr_wdata  (dmux_ccr_wdata),
+        .out_vld    (out_vld),                  // 出口 KO 由 DMUX 直出
+        .out_data   (out_data),
+        .out_tid    (out_tid)
     );
 
     // CSR 全表直出到端口（验证侧按地址表切）；另外切出 ccr/th_stat/cur_ts 三个常用字段
@@ -284,6 +336,8 @@ module poe_platform #(
                 .win_in(mux_win_data),
                 .win_out(eu_win_out),
                 .win_we(),
+                .ccr_in(mux_win_ccr),
+                .ccr_out(eu_ccr_out),
                 .csr_snap(csr_flat_w[mux_win_tid*CSRB*8 +: CSRB*8]),
                 .csr_we(eu_csr_we),
                 .csr_wtid(eu_csr_wtid),
@@ -310,6 +364,8 @@ module poe_platform #(
                 .win_in(mux_win_data),
                 .win_out(eu_win_out),
                 .win_we(),
+                .ccr_in(mux_win_ccr),
+                .ccr_out(eu_ccr_out),
                 .csr_snap(csr_flat_w[mux_win_tid*CSRB*8 +: CSRB*8]),
                 .csr_we(eu_csr_we),
                 .csr_wtid(eu_csr_wtid),

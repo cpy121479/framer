@@ -7,7 +7,8 @@
 //      观察发射顺序 = 每个发射点都取 (pri 最小, 同 pri age 最小)
 //   ③ 不抢占：假 EU 一条 task 占用 EU_LAT 拍，占用期间不再收新 task
 //   ④ 多 ts：每线程跑 2 个 ts（ts0 + 跳转落点 ts3）→ 共 4 条 task
-//   ⑤ 出口 KO：DA/SA 对调，且每条线程的出口 KO 都能对回自己的入口 KO
+//   ⑤ 出口 KO：由（假）DMUX 直出（真平台里是 DMUX 用 O 窗再生）；池子收"已发出 + 已取走"
+//      两个信息后才释放槽位，且出口 KO 的低 16B 原样保持入口 KO 的低 16B
 //
 // 期望顺序（确定性）：严格优先级 + 不抢占 ⇒ 高优先级线程只要有下一条 task 要发，
 //   就在每个发射点压住低优先级线程；两个线程的 done 相差 1 拍时，发射序列会交错：
@@ -62,10 +63,11 @@ module pool_smoke_tb;
     logic                  eu_done;                // 假 EU 完成脉冲
     logic [TID_W-1:0]      eu_done_tid;            // 完成 pulse 属于哪个线程
     logic [N_THR*8-1:0]    th_stat_flat;           // 每线程 TH_STAT（假 EU 代写，池子只读）
-    logic                  out_vld;                // 出口 KO 有效
-    logic [383:0]          out_data;               // 出口 48B 报文
-    logic [TID_W-1:0]      out_tid;                // 出口 KO 属于哪个线程
+    // 出口 KO 由 DMUX 直出（本冒烟用"假 DMUX"在结果拍给一拍脉冲）；池子只收"已发出/已取走"
+    logic                  ko_sent_vld;            // 出口 KO 已发出（假 DMUX 给）
+    logic [TID_W-1:0]      ko_sent_tid;            // 属于哪个线程
     logic                  out_rdy = 1'b1;         // 冒烟里下游一直能收
+    logic [N_THR*KO_LO_W-1:0] ko_lo_flat;          // 入口 KO 低 16B（每线程一份，给 DMUX 再生 KO）
     logic                  ts_done_vld;            // 一个 ts 结束（单拍）
     logic [TID_W-1:0]      ts_done_tid;            // 哪个线程
     logic [TS_W-1:0]       ts_done_idx;            // 第几个 ts
@@ -104,10 +106,10 @@ module pool_smoke_tb;
         .eu_done         (eu_done),         // 假 EU 完成
         .eu_done_tid     (eu_done_tid),     // 完成属于哪个线程
         .th_stat_flat    (th_stat_flat),    // 线程结束状态（EU 写，池子读）
-        .out_vld         (out_vld),         // 出口 KO 有效
-        .out_data        (out_data),        // 出口报文
-        .out_tid         (out_tid),         // 出口 KO 线程号
+        .ko_sent_vld     (ko_sent_vld),     // 出口 KO 已发出（由 DMUX 直出，池子只收事件）
+        .ko_sent_tid     (ko_sent_tid),     // 属于哪个线程
         .out_rdy         (out_rdy),         // 下游能否收
+        .ko_lo_flat      (ko_lo_flat),      // 入口 KO 低 16B（出口 KO 原样保持那部分）
         .ts_done_vld     (ts_done_vld),     // ts 结束脉冲
         .ts_done_tid     (ts_done_tid),     // ts 事件线程号
         .ts_done_idx     (ts_done_idx),     // ts 事件序号
@@ -176,13 +178,21 @@ module pool_smoke_tb;
     assign eu_done     = eu_done_r;
     assign eu_done_tid = eu_tid;
 
+    // ---- 假 DMUX：结果拍 + 末条 task → 出口 KO 直出（一拍脉冲），与真实 DMUX 同拍 ----
+    //   真实 DMUX 的出口 KO = { O 窗 32B, 入口 KO 低 16B }；本冒烟只关心"事件 + 低 16B 原样"，
+    //   高 32B 用入口报文的低 32B 凑数（内容不在本模块的检查范围内）。
+    logic [383:0] out_data_r;
+    assign ko_sent_vld = eu_done_r && eu_last;
+    assign ko_sent_tid = eu_tid;
+    assign out_data_r  = {ko_lo_flat[eu_tid*KO_LO_W +: KO_LO_W],
+                          ko_lo_flat[eu_tid*KO_LO_W +: KO_LO_W]};
+
     // ========================================================================
     // 激励：每拍一个 KO，全部就位后再放行 EU
     // ========================================================================
     logic [2:0] pri_in = '0;             // 当前 send_ko 的 PRI
     logic [2:0] pri_of_tid [N_THR];      // 每个槽的 PRI（alloc 时锁存）
-    logic [7:0] da_of_tid  [N_THR];      // 每个槽的入口 DA（alloc 时锁存）
-    logic [7:0] sa_of_tid  [N_THR];      // 每个槽的入口 SA（alloc 时锁存）
+    logic [KO_LO_W-1:0] ko_lo_of_tid [N_THR];  // 每个槽的入口 KO 低 16B（alloc 时锁存）
     logic [7:0] n_alloc;                 // 已建线程数
 
     always_ff @(posedge clk or negedge rst_n) begin
@@ -190,8 +200,7 @@ module pool_smoke_tb;
             n_alloc <= '0;
         end else if (alloc) begin
             pri_of_tid[alloc_tid] <= pri_in;                       // 记住这个槽的优先级
-            da_of_tid[alloc_tid]  <= ko_data[KO_DA_LSB +: 8];      // 记住入口 DA
-            sa_of_tid[alloc_tid]  <= ko_data[KO_SA_LSB +: 8];      // 记住入口 SA
+            ko_lo_of_tid[alloc_tid] <= ko_data[KO_LO_LSB +: KO_LO_W];  // 记住入口 KO 低 16B
             n_alloc               <= n_alloc + 8'd1;
         end
     end
@@ -216,13 +225,13 @@ module pool_smoke_tb;
     // 观测
     // ========================================================================
     logic [TID_W-1:0] got_order [TASK_TOTAL];   // 全部 task 的 tid 发射顺序
-    logic             da_sa_ok;           // 出口 KO 的 DA/SA 对调检查
+    logic             ko_lo_ok;           // 出口 KO 低 16B 是否原样保持入口值
     int n_task, n_tsdone, n_thrdone, n_out;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             n_task <= 0; n_tsdone <= 0; n_thrdone <= 0; n_out <= 0;
-            da_sa_ok <= 1'b1;
+            ko_lo_ok <= 1'b1;
         end else begin
             if (task_vld && task_rdy) begin
                 if (n_task < TASK_TOTAL) got_order[n_task] <= task_tid;
@@ -238,11 +247,11 @@ module pool_smoke_tb;
                 $display("THR_DONE  tid=%0d @%0t", thr_done_tid, $time);
                 n_thrdone <= n_thrdone + 1;
             end
-            if (out_vld && out_rdy) begin
-                $display("OUT_KO    tid=%0d @%0t", out_tid, $time);
+            // 出口 KO 由（假）DMUX 直出：池子只看"已发出"事件
+            if (ko_sent_vld) begin
+                $display("OUT_KO    tid=%0d @%0t", ko_sent_tid, $time);
                 n_out <= n_out + 1;
-                if (out_data[KO_DA_LSB +: 8] !== sa_of_tid[out_tid]) da_sa_ok <= 1'b0;
-                if (out_data[KO_SA_LSB +: 8] !== da_of_tid[out_tid]) da_sa_ok <= 1'b0;
+                if (out_data_r[KO_LO_LSB +: KO_LO_W] !== ko_lo_of_tid[ko_sent_tid]) ko_lo_ok <= 1'b0;
             end
         end
     end
@@ -285,7 +294,8 @@ module pool_smoke_tb;
              (n_thrdone  == N_KO)           &&
              (n_out      == N_KO)           &&
              (ct_skip_cnt == 8'd0)          &&
-             da_sa_ok;
+             (busy == 1'b0) && (active_cnt == 7'd0) &&   // 所有槽都已释放（KO 取走后）
+             ko_lo_ok;
         for (i = 0; i < TASK_TOTAL; i++)
             if (got_order[i] !== exp_order[i]) ok = 1'b0;
 
@@ -294,8 +304,8 @@ module pool_smoke_tb;
                      n_task, n_tsdone, n_thrdone, n_out, ct_skip_cnt);
             $finish;
         end else begin
-            $display("POOL_SMOKE_FAIL  task=%0d ts_done=%0d thr_done=%0d out_ko=%0d ct_skip=%0d da_sa_ok=%0b",
-                     n_task, n_tsdone, n_thrdone, n_out, ct_skip_cnt, da_sa_ok);
+            $display("POOL_SMOKE_FAIL  task=%0d ts_done=%0d thr_done=%0d out_ko=%0d ct_skip=%0d ko_lo_ok=%0b busy=%0b",
+                     n_task, n_tsdone, n_thrdone, n_out, ct_skip_cnt, ko_lo_ok, busy);
             for (i = 0; i < TASK_TOTAL; i++)
                 $display("  got_order[%0d]=%0d expected=%0d", i, got_order[i], exp_order[i]);
             $fatal(1, "pool smoke failed");

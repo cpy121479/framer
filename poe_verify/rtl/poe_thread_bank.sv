@@ -13,8 +13,14 @@
 //         因为预发射口按 44bit 表项写、不是字节对齐的。
 //
 // RF = 每线程 **256B（2048bit = 64 槽 × 32bit，槽 0 在最高位）**。
-//   本模块只做存储：给 MUX 一个"整份 RF 读口 + 整份 RF 回写口"，
-//   取数/回写的字节位置由 MUX（poe_mux）按 MUX 指令决定，bank 不解释 RF 的语义。
+//   本模块只做存储：给 MUX 一个"整份 RF 读口"、给 DMUX 一个"整份 RF 回填口"，
+//   取数/回填的字节位置由 MUX/DMUX 按 MUX 指令决定，bank 不解释 RF 的语义。
+//
+// CCR = 每线程 **32B（256bit）** 条件寄存器表（**独立于 CSR**）：
+//   · MUX 按 MXCC 指令从这 32B 里选 2B 给 EU（[0]→高字节、[1]→低字节）；
+//   · DMUX 在每个 task 结束时把 EU 写回的 2B 填回 MXCC 选中的两个字节；
+//   · 同拍把这 2B **镜像**进 CSR 0x2（16bit，小端），验证侧仍按"CSR 0x2 = CCR"比对；
+//   · 建线程时清零。
 // EU 侧对接（保持不变）：RMW 的 mstatus slot0 ← CSR 0x2 CCR；ro_regs 的 mcycle ← CSR 0x4 SYS_TS；
 //   EU 的 WO 回刷本版只计数（真表里暂无对应只写寄存器）。
 // 预发射口（与 DUT 的 csr 预发射口同形）：KO 建线程拍预写 CW 窗低 4 表项，
@@ -26,16 +32,26 @@ module poe_thread_bank #(
     parameter int N_THR = 8,      // 线程数 = CSR/RF 表的份数
     parameter int TID_W = 3,      // 线程号位宽
     parameter int RF_W    = 2048, // 每线程 RF 位宽（256B = 64 槽 × 32bit）
-    parameter int CSRB  = 90      // 每线程 CSR 字节数（0x00..0x59）
+    parameter int CSRB  = poe_pkg::CSRB,   // 每线程 CSR 字节数（0x00..0x59）
+    parameter int CCRB  = poe_pkg::CCR_B   // 每线程 CCR 表字节数（32B）
 ) (
     input  logic             clk,             // 时钟
     input  logic             rst_n,           // 低有效异步复位
     input  logic             alloc,           // 申请线程脉冲（最高优先级）
     input  logic [TID_W-1:0] alloc_tid,       // 清哪个线程
     input  logic [15:0]      alloc_base_ts,   // 建线程同拍写 CSR 0xc PC_INTER（程序基址）
-    input  logic             mux_rf_we,       // MUX 回写 RF（一拍，一个 task 一次）
-    input  logic [TID_W-1:0] mux_rf_tid,      // 回写哪个线程
-    input  logic [RF_W-1:0]  mux_rf_wdata,    // 回写后的整份 RF
+    input  logic             dmux_rf_we,      // DMUX 回填 RF（一拍，一个 task 一次）
+    input  logic [TID_W-1:0] dmux_rf_tid,     // 回填哪个线程
+    input  logic [RF_W-1:0]  dmux_rf_wdata,   // 回填后的整份 RF
+    // ---- CCR 表（32B）读口：MUX 按 MXCC 从这里选 2B ----
+    input  logic [TID_W-1:0] ccr_rtid,        // 读哪个线程的 CCR 表
+    output logic [CCRB*8-1:0] ccr_rd,         // 该线程整份 32B CCR 表（组合读）
+    // ---- CCR 表写口：DMUX 在每个 task 结束时回填 2B（两个字节落点）+ 镜像 CSR 0x2 ----
+    input  logic             ccr_we,          // 回填写使能（一拍）
+    input  logic [TID_W-1:0] ccr_wtid,        // 回填哪个线程
+    input  logic [4:0]       ccr_a0,          // 高字节落在 CCR 表哪个字节（MXCC[0]）
+    input  logic [4:0]       ccr_a1,          // 低字节落在哪个字节（MXCC[1]）
+    input  logic [15:0]      ccr_wdata,       // 要写回的 2B
     // ---- EU 侧 POE CSR 写口（通用：地址 + 位宽 + 数据；CCR 只是地址 0x2 的一个表项）----
     input  logic             eu_csr_we,       // EU 发起的 CSR 写使能
     input  logic [TID_W-1:0] eu_csr_wtid,     // 写哪个线程
@@ -51,10 +67,6 @@ module poe_thread_bank #(
     input  logic [6:0]       csr_waddr,       // 写地址（字节偏移）
     input  logic [2:0]       csr_ww,          // 写位宽码
     input  logic [383:0]     csr_wdata,       // 写数据（低位对齐）
-    input  logic [TID_W-1:0] csr_rtid,        // 读哪个线程
-    input  logic [6:0]       csr_raddr,       // 读地址
-    input  logic [2:0]       csr_rw,          // 读位宽码
-    output logic [383:0]     csr_rdata,       // 读数据（低位对齐）
     input  logic [TID_W-1:0] rf_rd_tid,       // MUX 要读哪个线程的 RF
     output logic [RF_W-1:0]  rf_rd,           // 该线程整份 256B RF（组合读）
     output logic [N_THR*RF_W-1:0]   rf_flat,  // 全表 RF
@@ -80,9 +92,12 @@ module poe_thread_bank #(
     logic [7:0]      csr [N_THR][CSRB];
     logic [CW_N*CW_W-1:0] cw [N_THR];               // 0x2e..0x59：CW 窗（8×44bit）
     logic [RF_W-1:0] rf  [N_THR];
+    logic [CCRB*8-1:0] ccr [N_THR];                 // 每线程 32B CCR 表（独立于 CSR）
 
     // ---- MUX 读口：整份 RF 给 MUX，按字节切数由 MUX 自己做 ----
     assign rf_rd = rf[rf_rd_tid];
+    // ---- MUX 读口：整份 CCR 表给 MUX，MXCC 选哪 2B 由 MUX 自己解 ----
+    assign ccr_rd = ccr[ccr_rtid];
     // 注：POE CSR ↔ EU 侧 CSR（RISC-V 束）的映射**不在这里**，
     //     已经挪到 EU 壳（poe_eu_dut/poe_eu_rm），bank 只做通用存储。
 
@@ -108,6 +123,7 @@ module poe_thread_bank #(
                 for (int b = 0; b < CWB; b++) csr[t][b] <= 8'd0;
                 cw[t] <= '0;
                 rf[t] <= '0;
+                ccr[t] <= '0;
             end
         end else begin
             // ① SYS_TS：每拍把所有线程的 0x5..0x8 刷成系统时标（小端）
@@ -130,11 +146,20 @@ module poe_thread_bank #(
                 for (int i = 0; i < 8; i++)
                     csr[alloc_tid][int'(A_MUX_PTR) + i] <= MUX_PTR_DEF[i*8 +: 8];
                 rf[alloc_tid] <= '0;
+                ccr[alloc_tid] <= '0;                                   // CCR 表（32B）清零
             end
-            // MUX 回写整份 RF：一个 task 一次（MUX 已经把没被指令覆盖的字节并好）
+            // DMUX 回填整份 RF：一个 task 一次（DMUX 已经把没被指令碰过的字节并好）
             //   只有"同一拍又在 alloc 同一个 tid"才让位（正常不会发生）
-            if (mux_rf_we && !(alloc && (alloc_tid == mux_rf_tid))) begin
-                rf[mux_rf_tid] <= mux_rf_wdata;
+            if (dmux_rf_we && !(alloc && (alloc_tid == dmux_rf_tid))) begin
+                rf[dmux_rf_tid] <= dmux_rf_wdata;
+            end
+            // CCR 回填（DMUX）：一个 task 一次，把 EU 写回的 2B 填到 MXCC 选中的两个字节，
+            //   同拍镜像进 CSR 0x2（16bit 小端：0x2 = 低字节、0x3 = 高字节）供验证侧比对。
+            if (ccr_we && !(alloc && (alloc_tid == ccr_wtid))) begin
+                ccr[ccr_wtid][int'(ccr_a0)*8 +: 8] <= ccr_wdata[15:8];
+                ccr[ccr_wtid][int'(ccr_a1)*8 +: 8] <= ccr_wdata[7:0];
+                csr[ccr_wtid][int'(A_CCR)]      <= ccr_wdata[7:0];
+                csr[ccr_wtid][int'(A_CCR) + 1]  <= ccr_wdata[15:8];
             end
             // 平台线程侧写：只有"同一拍又在 alloc 同一个 tid"才让位
             if (csr_we && !(alloc && (alloc_tid == csr_wtid))) begin
@@ -165,18 +190,6 @@ module poe_thread_bank #(
                 if (pre_we && pre_strb[e])
                     cw[pre_tid][e*CW_W +: CW_W] <= pre_data[e*CW_W +: CW_W];
         end
-    end
-
-    // ---- 平台线程侧读口 ----
-    always_comb begin
-        csr_rdata = '0;
-        for (int i = 0; i < 44; i++)
-            if ((i < nbytes(csr_rw)) && ((int'(csr_raddr) + i) < CSRB)) begin
-                if ((int'(csr_raddr) + i) < CWB)
-                    csr_rdata[i*8 +: 8] = csr[csr_rtid][int'(csr_raddr) + i];
-                else
-                    csr_rdata[i*8 +: 8] = cw[csr_rtid][(int'(csr_raddr) - CWB + i)*8 +: 8];
-            end
     end
 
     // ---- 观测扁平化 ----

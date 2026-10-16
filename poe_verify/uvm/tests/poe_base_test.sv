@@ -68,14 +68,33 @@ class poe_base_test extends uvm_test;
         @(posedge vif.clk);
     endtask
 
-    // 预载 MUX 指令存储：fetcher k ← RF[254-2k]（mvld=2），使窗口 word(15-r) = 表 x_r
+    // ---- MUX 画像（与微指令画像配套）----
+    //   一行 = 五组字段（布局见 poe_pkg 的 ⑤ 节）：
+    //     ① 取数组：第 k 条 → 窗口第 k 个 2B 槽（slot 0 最高）← RF 字节 (2k, 2k+1)（i=1、mvld=2）
+    //     ② 移位组：全 0 = 直通（不提取字段）；③ MXCC：CCR[0]→高字节、CCR[1]→低字节
+    //     ④/⑤ O 路：O 窗第 m 个 2B ← 64B 窗字节 (2m, 2m+1)（直通）→ 出口 KO 高 32B
+    //   冒烟阶段按整窗 32 组填满（保证 EU 侧 x0..x15 是活数据）；真实画像只填用到的槽。
+    function bit [MUX_ROW_W-1:0] mux_row_img();
+        bit [MUX_ROW_W-1:0] r;
+        r = '0;
+        for (int k = 0; k < MUX_INS_N; k++) begin
+            r[MF_FET_LSB + MUX_INS_W*k +: MUX_INS_W] = mux_fetch_pack(1'b1, 2'd2, 8'(2*k));
+            r[MF_MXS_LSB + MXS_W*k +: MXS_W]         = '0;             // 直通
+        end
+        r[MF_MXCC_LSB +: MXCC_W]          = 5'd0;                      // 高字节 ← CCR 表第 0 字节
+        r[MF_MXCC_LSB + MXCC_W +: MXCC_W] = 5'd1;                      // 低字节 ← CCR 表第 1 字节
+        for (int m = 0; m < O_INS_N; m++) begin
+            r[MF_OFET_LSB + MUX_INS_W*m +: MUX_INS_W] = mux_fetch_pack(1'b1, 2'd2, 8'(2*m));
+            r[MF_OMXS_LSB + MXS_W*m +: MXS_W]         = '0;            // 直通
+        end
+        return r;
+    endfunction
+
     task load_mux_imem();
         virtual poe_if vif = poe_uvm_pkg::g_vif;
-        bit [351:0] row_img;
+        bit [MUX_ROW_W-1:0] row_img;
         wait (vif.rst_n === 1'b1);
-        row_img = '0;
-        for (int k = 0; k < 32; k++)
-            row_img[11*k +: 11] = {1'b1, 2'd2, 8'(254 - 2*k)};   // i=1, mvld=2, off=254-2k
+        row_img = mux_row_img();
         for (int r = 0; r < 16; r++) begin
             @(posedge vif.clk);
             vif.mux_imem_we    <= 1'b1;

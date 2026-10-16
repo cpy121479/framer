@@ -1,167 +1,164 @@
 // ============================================================================
-// poe_mux —— RF 取数 MUX 阶段（线程池 ↔ EU 之间）
+// poe_mux —— MUX 级：RF 取数 + MXS 移位 + MXCC 选 CSR（线程池 ↔ EU 之间）
 //
 //   一条 task（burst）带着 sub_pc 进来：
-//     ① 按 sub_pc 读一行 MUX 指令（32 条 × 11bit），逐条解码出 (offset, mvld)；
-//     ② 用这 32 条指令从该线程 256B RF 里取数，拼成 **64B 操作数窗口**：
-//          第 k 条指令（fetcher k）固定对应窗口的 2B 槽，**且 fetcher 0 = 最高 16bit**
-//          （打包序与 mux_shift_conv 规格一致：fetcher k → win[511-16k -: 16]）；
-//          槽内低字节先：mvld=2 → 槽低字节=RF[off]、槽高字节=RF[off+1]；
-//          mvld=1 → 只填槽低字节；mvld=0 → 该槽保持 0。
-//     ③ 窗口交给 EU；EU 处理完还回 64B 结果；
-//     ④ 用**同一行 32 条指令**把结果反向散射回 RF 原偏移（覆盖写、无写使能、
-//        一个 task 写一次），未被覆盖的字节保持原值；
-//     ⑤ 回写落表之后，才向线程池回 task_done。
+//     ① 按 sub_pc 读一行 MUX 指令（行布局见 poe_pkg 的 ⑤ 节）；
+//     ② **取数组**从该线程 256B RF 取 0~2B 填进 64B 操作数窗口的对应 2B 槽：
+//          第 k 条 ↔ 窗口第 k 个 2B 槽，**slot 0 = 最高 16bit**（win[511:496]）；
+//          先取的字节放槽的高 8bit（mvld=2 → 槽[15:8]=RF[off]、槽[7:0]=RF[off+1]）；
+//          mvld=0 的槽保持 0（= 不取数）；
+//     ③ **移位组**（MXS）把该槽里的字段提取出来左对齐（语义见 poe_pkg::mxs_align）：
+//          这样 EU 看到的就是"已经按指令对齐好"的操作数；
+//     ④ **MXCC** 从该线程 32B CCR 表里选 2B（[0]→高字节、[1]→低字节）给 EU 当 CSR；
+//     ⑤ 窗口 + 2B CSR 交给 EU；EU 结果连同当前 task 的上下文（tid/pc/last）交给 DMUX，
+//        **回写 RF / 回填 CCR / 再生 KO 都在 DMUX 里做**（本模块不回写）。
 //
-//   偏移来源（单条指令 [10] i 控制）：
+//   偏移来源（单条取数指令 [10] i 控制）：
 //     i=0 → CSR MUX_PTR（0x16，8×8bit 表）里按 src_ptr 低 3bit 选一个字节偏移
 //     i=1 → [7:0] 直接当字节偏移
 //
 //   画像约束（由 MUX 指令表保证，本模块不做检查）：
-//     · 同一行内不会有两个条指令覆盖同一个 RF 字节（不重叠）；
-//     · mvld=2 时 offset ≤ 254（不会越过 256B RF 边界）。
+//     · 同一行内不会有两个取数指令覆盖同一个 RF 字节（不重叠）；
+//     · mvld=2 时 off ≤ 254（不会越过 256B RF 边界）。
 // ============================================================================
 import poe_pkg::*;
 
 module poe_mux #(
-    parameter int TID_W = 6,             // 线程号位宽
-    parameter int RF_W  = 2048,          // 每线程 RF 位宽（256B）
-    parameter int CSRB  = poe_pkg::CSRB, // 每线程 CSR 字节数
-    parameter int N_INS = MUX_INS_N,     // 一行 MUX 指令条数（32）
-    parameter int INS_W = MUX_INS_W,     // 单条指令位宽（11）
-    parameter int AW    = MUX_AW,        // 行号位宽（= sub_pc）
-    parameter int WIN_W = poe_pkg::WIN_W // EU 操作数窗口位宽（512 = 64B）
+    parameter int TID_W = 6,              // 线程号位宽
+    parameter int RF_W  = 2048,           // 每线程 RF 位宽（256B）
+    parameter int CSRB  = poe_pkg::CSRB,  // 每线程 CSR 字节数
+    parameter int N_INS = MUX_INS_N,      // 一行取数/移位组条数（32）
+    parameter int INS_W = MUX_INS_W,      // 取数指令位宽（11）
+    parameter int AW    = MUX_AW,         // 行号位宽（= sub_pc）
+    parameter int WIN_W = poe_pkg::WIN_W, // EU 操作数窗口位宽（512 = 64B）
+    parameter int CCR_W = poe_pkg::CCR_W  // 每线程 CCR 表位宽（256 = 32B）
 ) (
-    input  logic             clk,
-    input  logic             rst_n,
+    input  logic             clk,             // 时钟
+    input  logic             rst_n,           // 低有效异步复位
     // ---- 来自线程池的 task ----
-    input  logic             task_vld,       // 一条 task 有效
-    input  logic [TID_W-1:0] task_tid,       // 属于哪个线程
-    input  logic [AW-1:0]    task_sub_pc,    // 微指令行号（= MUX 指令行号）
-    input  logic             task_last,      // 本 task 是该线程最后一条
-    output logic             task_rdy,       // MUX 能收（空闲）
+    input  logic             task_vld,        // 一条 task 有效
+    input  logic [TID_W-1:0] task_tid,        // 属于哪个线程
+    input  logic [AW-1:0]    task_sub_pc,     // 微指令行号（= MUX 指令行号）
+    input  logic             task_last,       // 本 task 是该线程最后一条
+    output logic             task_rdy,        // MUX 能收（空闲）
     // ---- MUX 指令存储读口 ----
-    output logic [AW-1:0]          mux_rd_addr,
-    input  logic [N_INS*INS_W-1:0] mux_row,
-    // ---- RF（bank）：读整份 / 回写整份 ----
-    output logic [TID_W-1:0] rf_rd_tid,      // 要读哪个线程的 RF
-    input  logic [RF_W-1:0]  rf_rd,          // 该线程整份 256B RF
-    output logic             mux_rf_we,      // 回写请求（一拍）
-    output logic [TID_W-1:0] mux_rf_tid,     // 回写哪个线程
-    output logic [RF_W-1:0]  mux_rf_wdata,   // 回写后的整份 RF
+    output logic [AW-1:0]        mux_rd_addr, // 读哪一行（= sub_pc）
+    input  logic [MUX_ROW_W-1:0] mux_row,     // 该行整行指令
+    // ---- RF（bank）：整份读（DMUX 回写也用同一份原值做掩码保护）----
+    output logic [TID_W-1:0] rf_rd_tid,       // 要读哪个线程的 RF
+    input  logic [RF_W-1:0]  rf_rd,           // 该线程整份 256B RF
+    // ---- CCR 表（bank）：MXCC 选 2B ----
+    output logic [TID_W-1:0]  ccr_rtid,       // 要读哪个线程的 CCR 表
+    input  logic [CCR_W-1:0]  ccr_rd,         // 该线程整份 32B CCR 表
     // ---- CSR 快照（读 MUX_PTR）----
-    output logic [TID_W-1:0]  csr_rtid,
-    input  logic [CSRB*8-1:0] csr_snap,
+    output logic [TID_W-1:0]  csr_rtid,       // 要读哪个线程的 CSR
+    input  logic [CSRB*8-1:0] csr_snap,       // 该线程 CSR 全表快照
     // ---- 到 EU ----
-    output logic             win_vld,        // 窗口有效
-    output logic [TID_W-1:0] win_tid,        // 属于哪个线程
-    output logic [AW-1:0]    win_sub_pc,     // 微指令行号
-    output logic             win_last,       // 本 task 是线程最后一条（透传给 EU 壳）
-    output logic [WIN_W-1:0] win_data,       // 64B 操作数窗口
-    input  logic             win_rdy,        // EU 能否收
-    input  logic             eu_done,        // EU 结果有效
-    input  logic [TID_W-1:0] eu_done_tid,    // 结果属于哪个线程
-    input  logic [WIN_W-1:0] win_out,        // EU 处理后的 64B 窗口
-    // ---- 回线程池：一条 task 真正做完（RF 已回写）----
+    output logic             win_vld,         // 窗口有效
+    output logic [TID_W-1:0] win_tid,         // 属于哪个线程
+    output logic [AW-1:0]    win_sub_pc,      // 微指令行号
+    output logic             win_last,        // 本 task 是线程最后一条（透传给 EU 壳）
+    output logic [WIN_W-1:0] win_data,        // 64B 操作数窗口
+    output logic [15:0]      win_ccr,         // MXCC 选出的 2B CSR（CCR）给 EU
+    input  logic             win_rdy,         // EU 能否收
+    input  logic             eu_done,         // EU 结果有效
+    input  logic [TID_W-1:0] eu_done_tid,     // 结果属于哪个线程
+    // ---- 当前 task 上下文（给 DMUX 做回填 / O 窗 / KO 再生；指令行由 MUX 读出后共用）----
+    output logic [TID_W-1:0] ctx_tid,         // 当前 task 的线程号
+    output logic             ctx_last,        // 当前 task 是否线程最后一条
+    // ---- 回线程池：一条 task 真正做完（RF/CCR 已由 DMUX 落表）----
     output logic             task_done,
     output logic [TID_W-1:0] task_done_tid
 );
     typedef enum logic [1:0] { M_IDLE, M_PRESENT, M_RUN } st_e;
-    st_e              st;
-    logic [TID_W-1:0] tid_q;                 // 当前 task 的线程号
-    logic [AW-1:0]    pc_q;                  // 当前 task 的 sub_pc
-    logic             last_q;                // 当前 task 是不是线程最后一条
-    logic [7:0]       off_q  [N_INS];        // 32 条指令解出的 RF 字节偏移
-    logic [1:0]       mvld_q [N_INS];        // 32 条指令的 mvld
-    logic [7:0]       off_c  [N_INS];        // 组合解码（收 task 那一拍锁存）
-    logic [1:0]       mvld_c [N_INS];
-    logic [WIN_W-1:0] win_c;                 // 组出的 64B 窗口
-    logic [RF_W-1:0]  wb_c;                  // 反向散射后的整份 RF
-    logic             done_r;                // 回池子的完成脉冲
-    logic [TID_W-1:0] done_tid_r;
+    st_e              st;                     // 当前状态
+    logic [TID_W-1:0] tid_q;                  // 当前 task 的线程号
+    logic [AW-1:0]    pc_q;                   // 当前 task 的 sub_pc
+    logic             last_q;                 // 当前 task 是不是线程最后一条
+    logic             done_r;                 // 回池子的完成脉冲
+    logic [TID_W-1:0] done_tid_r;             // 完成脉冲的线程号
+    logic [WIN_W-1:0] win_c;                  // 组合组出的 64B 窗口
+    logic [15:0]      ccr_c;                  // 组合选出的 2B CSR
 
-    // ---- 单条指令解码 ----
-    function automatic logic [7:0] mux_off(input logic [INS_W-1:0] ins,
-                                           input logic [CSRB*8-1:0] snap);
-// i=0：从 CSR MUX_PTR（0x16）里按 src_ptr 低 3bit 选一个字节偏移；i=1：[7:0] 就是偏移
-        mux_off = ins[MI_I_LSB] ? ins[MI_PTR_LSB +: 8]
-                                : snap[8*int'(A_MUX_PTR) + 8*ins[MI_PTR_LSB +: 3] +: 8];
+    // ---- 一个 2B 槽：取数（0~2B）→ 槽内 16bit → 按 MXS 左对齐 ----
+    function automatic logic [15:0] lane_of(input logic [INS_W-1:0]  ins,
+                                            input logic [MXS_W-1:0] mxs,
+                                            input logic [RF_W-1:0]  rfr,
+                                            input logic [CSRB*8-1:0] snap);
+        automatic logic [1:0]  mv;    // 取几个字节
+        automatic logic [7:0]  of;    // 字节偏移
+        automatic logic [15:0] raw;   // 取到的 16bit（高字节 = 先取的字节）
+        mv  = mux_mvld(ins);
+        of  = mux_off(ins, snap);
+        raw = 16'd0;
+        if ((mv == 2'd2) && (int'(of) <= 254))
+            raw = {rfr[8*int'(of) + 8 +: 8], rfr[8*int'(of) +: 8]};   // 先取的字节在高 8bit
+        else if (mv == 2'd1)
+            raw = {rfr[8*int'(of) +: 8], 8'd0};                       // 取 1B 放高 8bit
+        lane_of = (mv == 2'd0) ? 16'd0 : mxs_align(raw, mxs);
     endfunction
-    function automatic logic [1:0] mux_mvld(input logic [INS_W-1:0] ins);
-        mux_mvld = ins[MI_MVLD_LSB +: 2];
+
+    // ---- MXCC：从 32B CCR 表选 2B（[0]→高字节、[1]→低字节）----
+    function automatic logic [15:0] ccr_pick(input logic [MUX_ROW_W-1:0] row,
+                                             input logic [CCR_W-1:0]    tab);
+        automatic logic [4:0] a0, a1;
+        a0 = row[MF_MXCC_LSB +: MXCC_W];
+        a1 = row[MF_MXCC_LSB + MXCC_W +: MXCC_W];
+        ccr_pick = {tab[8*int'(a0) +: 8], tab[8*int'(a1) +: 8]};
     endfunction
 
+    // ---- 组 64B 窗口（按 ①/② 两组字段；mvld=0 的槽保持 0）----
     always_comb begin
-        for (int k = 0; k < N_INS; k++) begin
-            off_c[k]  = mux_off (mux_row[INS_W*k +: INS_W], csr_snap);
-            mvld_c[k] = mux_mvld(mux_row[INS_W*k +: INS_W]);
-        end
-    end
-
-    // ---- 组 64B 窗口（用锁存下来的 32 条指令 + 该线程 RF）----
-    always_comb begin
-        win_c = '0;                                     // mvld=0 的槽保持 0
-        for (int k = 0; k < N_INS; k++) begin
-            if ((mvld_q[k] == 2'd2) && (off_q[k] <= 8'd254))
-                win_c[WIN_W-16*(k+1) +: 16] = rf_rd[8*off_q[k] +: 16];  // fetcher k → 高端第 k 个 2B 槽
-            else if (mvld_q[k] == 2'd1)
-                win_c[WIN_W-16*(k+1) +: 8]  = rf_rd[8*off_q[k] +: 8];   // 只填槽低字节
-        end
-    end
-
-    // ---- 反向散射：把 EU 的 64B 结果按同一行指令写回 RF 原偏移 ----
-    always_comb begin
-        wb_c = rf_rd;                                   // 未被覆盖的字节保持原值
-        for (int k = 0; k < N_INS; k++) begin
-            if ((mvld_q[k] == 2'd2) && (off_q[k] <= 8'd254))
-                wb_c[8*off_q[k] +: 16] = win_out[WIN_W-16*(k+1) +: 16];
-            else if (mvld_q[k] == 2'd1)
-                wb_c[8*off_q[k] +: 8]  = win_out[WIN_W-16*(k+1) +: 8];
-        end
+        win_c = '0;
+        for (int k = 0; k < N_INS; k++)
+            if (mux_mvld(mux_row[MF_FET_LSB + INS_W*k +: INS_W]) != 2'd0)
+                win_c[WIN_W-16*(k+1) +: 16] =
+                    lane_of(mux_row[MF_FET_LSB + INS_W*k +: INS_W],
+                            mux_row[MF_MXS_LSB + MXS_W*k +: MXS_W],
+                            rf_rd, csr_snap);
+        ccr_c = ccr_pick(mux_row, ccr_rd);
     end
 
     // ---- 组合输出 ----
     assign task_rdy     = (st == M_IDLE);
     assign mux_rd_addr  = (st == M_IDLE) ? task_sub_pc : pc_q;
     assign rf_rd_tid    = (st == M_IDLE) ? task_tid    : tid_q;
+    assign ccr_rtid     = (st == M_IDLE) ? task_tid    : tid_q;
     assign csr_rtid     = (st == M_IDLE) ? task_tid    : tid_q;
     assign win_vld      = (st == M_PRESENT);
     assign win_tid      = tid_q;
     assign win_sub_pc   = pc_q;
     assign win_last     = last_q;
     assign win_data     = win_c;
-    assign mux_rf_we    = (st == M_RUN) && eu_done && (eu_done_tid == tid_q);
-    assign mux_rf_tid   = tid_q;
-    assign mux_rf_wdata = wb_c;
+    assign win_ccr      = ccr_c;
+    assign ctx_tid      = tid_q;
+    assign ctx_last     = last_q;
     assign task_done    = done_r;
     assign task_done_tid= done_tid_r;
 
-    // ---- 状态机 ----
+    // ---- 状态机：收 task → 递窗口给 EU → 等 EU 结果 ----
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            st <= M_IDLE; tid_q <= '0; pc_q <= '0; last_q <= 1'b0;
-            done_r <= 1'b0; done_tid_r <= '0;
-            for (int k = 0; k < N_INS; k++) begin
-                off_q[k]  <= '0;
-                mvld_q[k] <= '0;
-            end
+            st <= M_IDLE;
+            tid_q <= '0;
+            pc_q <= '0;
+            last_q <= 1'b0;
+            done_r <= 1'b0;
+            done_tid_r <= '0;
         end else begin
-            done_r <= 1'b0;                              // 完成脉冲只给一拍
+            done_r <= 1'b0;                       // 完成脉冲只给一拍
             case (st)
-                // 收 task：当拍锁存解码结果（task_rdy = 本状态）
+                // 收 task（task_rdy = 本状态）
                 M_IDLE: if (task_vld) begin
                     st     <= M_PRESENT;
                     tid_q  <= task_tid;
                     pc_q   <= task_sub_pc;
                     last_q <= task_last;
-                    for (int k = 0; k < N_INS; k++) begin
-                        off_q[k]  <= off_c[k];
-                        mvld_q[k] <= mvld_c[k];
-                    end
                 end
                 // 把窗口递给 EU，等它收下
                 M_PRESENT: if (win_rdy) st <= M_RUN;
-                // 等 EU 结果 → 当拍反向散射回写（下一拍 RF 已落表），并回池子 done
+                // 等 EU 结果：结果拍上 DMUX 用同一行指令回填 RF/CCR（组合写口），
+                // 因此本拍就能向池子报 task_done（bank 当拍落表）。
                 M_RUN: if (eu_done && (eu_done_tid == tid_q)) begin
                     st         <= M_IDLE;
                     done_r     <= 1'b1;

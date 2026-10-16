@@ -5,7 +5,8 @@
 //   · 不抢占：正在跑的线程不被打断，只在"下一个发射点"按规则重选
 //   · 最多 N_THR=64 个线程同时活跃（TID_W=6）
 //   · 调度：pri 小优先（= KO 报文行1 的 PRI，0 最高）；同级取 age 最小（最老）
-//   · 出口 KO 被真正取走（out_rdy）后才释放线程槽
+//   · 出口 KO 由 DMUX 直出（本模块不再拼报文）；本模块只收"出口 KO 已发出"事件
+//     （ko_sent_vld/ko_sent_tid）与"被取走"（out_rdy），**两者都满足才释放线程槽**
 //
 // 结构（三块）：
 //   ① per-thread 状态数组：t_st / t_cur / t_bid / t_pri / t_age / t_ko ...
@@ -63,11 +64,12 @@ module poe_thr_pool #(
     input  logic [TID_W-1:0] eu_done_tid,
     // ---- CSR 观测（线程结束由 EU 写 TH_STAT，池子只看不写）----
     input  logic [N_THR*8-1:0] th_stat_flat,    // 每线程 TH_STAT：tid*8 +: 8
-    // ---- 出口 KO（单口）----
-    output logic             out_vld,
-    output logic [383:0]     out_data,
-    output logic [TID_W-1:0] out_tid,
-    input  logic             out_rdy,
+    // ---- 出口 KO：由 DMUX 直出，池子只收"已发出/已取走"两个信息 ----
+    input  logic             ko_sent_vld,     // 出口 KO 已发出（DMUX 的 out_vld，一拍）
+    input  logic [TID_W-1:0] ko_sent_tid,     // 属于哪个线程
+    input  logic             out_rdy,         // 出口 KO 被下游取走（下游能收）
+    // ---- 入口 KO 低 16B（出口 KO 的这部分原样保持，交给 DMUX 再生）----
+    output logic [N_THR*KO_LO_W-1:0] ko_lo_flat,  // 每线程 128bit：tid*KO_LO_W +: KO_LO_W
     // ---- 事件（单口）----
     output logic             ts_done_vld,
     output logic [TID_W-1:0] ts_done_tid,
@@ -92,6 +94,7 @@ module poe_thr_pool #(
     logic [2:0]      t_pri  [N_THR];   // 线程优先级（0 最高）
     logic [15:0]     t_age  [N_THR];   // 进入顺序号（同级取最小 = 最老）
     logic [383:0]    t_ko   [N_THR];   // 入口报文（出口回写用）
+    logic            t_ko_sent [N_THR];// 该线程的出口 KO 是否已由 DMUX 发出
     logic [15:0]     age_cnt;          // 线程进入计数
     logic [7:0]      ct_skip;          // 全平台 c_task 跳过总数
 
@@ -151,7 +154,8 @@ module poe_thr_pool #(
                     // 池子只等它到，再发 thr_done 事件。
                     if (th_stat_flat[t*8 +: 8] == TH_DONE) t_rq[t] = RQ_EVENT;
                 end
-                T_OUT:   t_rq[t] = RQ_KO;                                    // 出口 KO 被取走才释放槽
+                // 出口 KO 已发出 → 申请"取走"（下游 out_rdy 恒 1）；没发出就继续等
+                T_OUT:   t_rq[t] = t_ko_sent[t] ? RQ_KO : RQ_NONE;
                 default: t_rq[t] = RQ_NONE;
             endcase
         end
@@ -217,14 +221,11 @@ module poe_thr_pool #(
     assign thr_done_vld = thr_done_p;
     assign thr_done_tid = thr_done_tid_r;
 
-    assign out_vld     = sel_vld && (sel_rq == RQ_KO);
-    assign out_tid     = sel_tid;
-    // 出口 KO：行1 的 DA/SA 对调，DP 与行2~6 原样（字段定义见 poe_pkg 的 KO_* 表）
-    assign out_data    = {t_ko[sel_tid][KO_SA_LSB +: 8],   // [383:376] ← 原 SA
-                          t_ko[sel_tid][KO_DP_LSB +: 8],   // [375:368] ← 原 DP
-                          t_ko[sel_tid][KO_DA_LSB +: 8],   // [367:360] ← 原 DA
-                          t_ko[sel_tid][359:320],          // [359:320] ← 行1 低 5B 原样
-                          t_ko[sel_tid][319:0]};           // [319:0]   ← 行2~6 原样
+    // 入口 KO 低 16B 的扁平导出：出口 KO 的这部分**原样保持入口值**（高 32B 由 DMUX 用 O 窗再生）
+    always_comb begin
+        for (int t = 0; t < N_THR; t++)
+            ko_lo_flat[t*KO_LO_W +: KO_LO_W] = t_ko[t][KO_LO_LSB +: KO_LO_W];
+    end
 
     // ---- 观测量 ----
     logic [6:0] act_cnt;
@@ -248,6 +249,7 @@ module poe_thr_pool #(
                 t_pri[t]  <= '0;
                 t_age[t]  <= '0;
                 t_ko[t]   <= '0;
+                t_ko_sent[t] <= 1'b0;
             end
             age_cnt <= '0;
             ct_skip <= '0;
@@ -331,6 +333,9 @@ module poe_thr_pool #(
                 endcase
             end
 
+            // ①.5 出口 KO 由 DMUX 直出：收到"已发出"就记下来，T_OUT 才允许释放槽位
+            if (ko_sent_vld) t_ko_sent[ko_sent_tid] <= 1'b1;
+
             // ② 受理 KO：建线程（alloc 走 bank 专用通路，不影响 CSR 请求仲裁）
             //   必须放在 per-thread 循环**之后**：新线程本拍旧状态还是 T_IDLE，
             //   循环里的 default 会写 t_st<=T_IDLE；这里的 NBA 后写才不会被覆盖。
@@ -343,6 +348,7 @@ module poe_thr_pool #(
                 t_pri[free_tid]  <= ko_data[KO_PRI_LSB +: KO_PRI_W];   // KO 行1 PRI，0 最高
                 t_age[free_tid]  <= age_cnt;
                 t_ko[free_tid]   <= ko_data;
+                t_ko_sent[free_tid] <= 1'b0;                          // 新线程：出口 KO 还没发
                 age_cnt          <= age_cnt + 16'd1;
             end
         end

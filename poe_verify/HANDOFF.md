@@ -13,16 +13,17 @@
 
 ## 2. 文件分组
 
-### A. 平台 RTL（11 个，全部必填）
+### A. 平台 RTL（12 个，全部必填）
 
 | 文件 | 说明 |
 |---|---|
 | `rtl/poe_pkg.sv` | **唯一位号/地址表**（burst 字段 / ts 行 / CSR 地址 / MUX 指令字段）；必须最先编 |
 | `rtl/poe_burst_imem.sv` | 宏指令存储（只读 ROM，每线程一个组合读口） |
-| `rtl/poe_mux_imem.sv` | MUX 指令存储（16 行 × 352bit，TB 预载） |
-| `rtl/poe_mux.sv` | RF 取数：按 MUX 指令组 64B 窗口 + 结果反向散射回 RF |
-| `rtl/poe_thread_bank.sv` | 每线程一份 CSR（72B）+ RF（256B）表 |
-| `rtl/poe_thr_pool.sv` | 线程池：建线程/取指/发 task/推 CUR_TS/事件/出口 KO |
+| `rtl/poe_mux_imem.sv` | MUX 指令存储（16 行 × 1280bit = 五组字段，TB 预载） |
+| `rtl/poe_mux.sv` | MUX 级：按 MUX 指令取数 + MXS 移位组 64B 窗口；MXCC 选 2B CCR 给 EU |
+| `rtl/poe_dmux.sv` | DMUX 级：逆 MXS/逆取数回填 RF（掩码保护）+ 回填 CCR 表 + O 窗累积 + 再生出口 KO |
+| `rtl/poe_thread_bank.sv` | 每线程一份 CSR（90B）+ RF（256B）+ CCR（32B）表 |
+| `rtl/poe_thr_pool.sv` | 线程池：建线程/取指/发 task/推 CUR_TS/事件；出口 KO 由 DMUX 直出，本模块收"已发出/已取走" |
 | `rtl/poe_platform.sv` | 单边平台：把上面 + EU 装配成一份（DUT/RM 各一份） |
 | `rtl/poe_verify_top.sv` | RTL 自检顶层：两份平台 + 检查器（**只有 tb_top 用**） |
 | `rtl/poe_checker.sv` | RTL 自检的 ts 粒度比较器（**只有 tb_top 用**） |
@@ -72,7 +73,7 @@
 - **include 路径**：`poe_verify/uvm`（给 `include "item/..."` 等）+ UVM 库的 `src`（给 `` `include "uvm_macros.svh" ``）
 - **顺序**（package 必须在前）：
   1. `rtl/poe_pkg.sv`
-  2. 其余 `rtl/*.sv`（11 个里去掉 poe_pkg）
+  2. 其余 `rtl/*.sv`（12 个里去掉 poe_pkg）
   3. `eu/isa_pkg.sv` → `eu/isa_formats_pkg.sv` → `eu/isa_instr_pkg.sv` → 其余 `eu/*.sv`
   4. `tb/*`（UVM 目标再加 `uvm/poe_uvm_pkg.sv`）
 - **宏/define**：**不需要任何 `+define+`**（代码里没有 ifdef 开关；只需给 UVM 目标的 `uvm_macros.svh`）
@@ -97,7 +98,8 @@
 ## 5. 三条用例的期望基线（回归参照）
 
 ```
-RTL 自检：CHK ts 边界=4  err=0  出口KO=2  线程结束=2；EU err 检查 8 次全 0；tid0/tid1 CCR 5/5   SMOKE PASS
+RTL 自检：MXS_SELFTEST 65536 组往返 OK（例子 0xABCD→50cc）；
+          CHK ts 边界=4  err=0  出口KO=2  线程结束=2；EU err 检查 8 次全 0；tid0/tid1 CCR 5/5   SMOKE PASS
 池级冒烟：POOL_SMOKE_PASS  task=24 ts_done=12 thr_done=6 out_ko=6 ct_skip=0
 UVM：    CSR 4 次错 0；RF 4 次错 0；出口 KO 2 次错 0；EU 错误标志 dut=8 rm=8 次错 0；UVM_ERROR 0
 ```

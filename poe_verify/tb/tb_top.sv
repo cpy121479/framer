@@ -26,7 +26,7 @@ module tb_top;
     // ---- MUX 指令预载 ----
     logic             mux_imem_we = 1'b0;
     logic [3:0]       mux_imem_waddr = '0;
-    logic [351:0]     mux_imem_wdata = '0;
+    logic [MUX_ROW_W-1:0] mux_imem_wdata = '0;   // 一行 = 五组字段（1280bit，见 poe_pkg ⑤）
     // ---- 出口 / 观测 ----
     logic         out_vld;
     logic [383:0] out_data;
@@ -128,15 +128,33 @@ module tb_top;
         imem_we = 1'b0;
     endtask
 
-    // ---- 预载 MUX 指令存储（与微指令画像配套）----
-    //   打包序按 mux_shift_conv 规格：fetcher 0 = 窗口最高 16bit；示例画像要让窗口
-    //   word(15-r) = RF 表的 x_r（字节 252-4r..255-4r），推出 fetcher k ← RF[254-2k]（mvld=2）。
-    //   这样示例 EU 从窗口看到的就是 x0..x15（与之前直连 RF 高位视图等价）。
+    // ---- MUX 画像（与微指令画像配套）----
+    //   一行 = 五组字段（布局见 poe_pkg 的 ⑤ 节）：
+    //     ① 取数组：第 k 条 → 窗口第 k 个 2B 槽（slot 0 最高）← RF 字节 (2k, 2k+1)（i=1、mvld=2）
+    //     ② 移位组：全 0 = 直通（不提取字段，16bit 原样搬）→ 冒烟先不做移位
+    //     ③ MXCC：CCR 表第 0 字节 → 高字节、第 1 字节 → 低字节（EU 的 2B CSR）
+    //     ④/⑤ O 路：O 窗第 m 个 2B ← 64B 窗字节 (2m, 2m+1)（直通）→ 出口 KO 高 32B
+    //   冒烟阶段按"整窗 32 组（取数+移位）"填满，保证 EU 侧的 x0..x15 是活数据；
+    //   真实画像只填用到的槽即可（空槽 mvld=0 = 不取数）。
+    function automatic logic [MUX_ROW_W-1:0] mux_row_img();
+        logic [MUX_ROW_W-1:0] r;
+        r = '0;
+        for (int k = 0; k < MUX_INS_N; k++) begin
+            r[MF_FET_LSB + MUX_INS_W*k +: MUX_INS_W] = mux_fetch_pack(1'b1, 2'd2, 8'(2*k));
+            r[MF_MXS_LSB + MXS_W*k +: MXS_W]         = '0;             // 直通
+        end
+        r[MF_MXCC_LSB +: MXCC_W]          = 5'd0;                      // 高字节 ← CCR 表第 0 字节
+        r[MF_MXCC_LSB + MXCC_W +: MXCC_W] = 5'd1;                      // 低字节 ← CCR 表第 1 字节
+        for (int m = 0; m < O_INS_N; m++) begin
+            r[MF_OFET_LSB + MUX_INS_W*m +: MUX_INS_W] = mux_fetch_pack(1'b1, 2'd2, 8'(2*m));
+            r[MF_OMXS_LSB + MXS_W*m +: MXS_W]         = '0;            // 直通
+        end
+        return r;
+    endfunction
+
     task automatic preload_mux_imem();
-        logic [351:0] row_img;
-        row_img = '0;
-        for (int k = 0; k < 32; k++)
-            row_img[11*k +: 11] = {1'b1, 2'd2, 8'(254 - 2*k)};   // i=1, mvld=2, off=254-2k
+        logic [MUX_ROW_W-1:0] row_img;
+        row_img = mux_row_img();
         for (int r = 0; r < 16; r++) begin
             mux_imem_we = 1'b1; mux_imem_waddr = r[3:0]; mux_imem_wdata = row_img;
             @(posedge clk); #1;
@@ -160,6 +178,47 @@ module tb_top;
         cw_entry = csr_dut[(tid*CSRB + CW_BYTE)*8 + e*44 +: 44];
     endfunction
 
+    // ---- MXS 语义自检（MUX 取值 ↔ DMUX 回填的往返一致性）----
+    //   ① 先核对设计给的例子：源 0xABCD、bits0=5 lr0=0 shift0=1 + bits1=7 lr1=1 shift1=1 → 0x50CC
+    //   ② 再穷举 bits0/lr0/shift0/bits1/lr1/shift1 的全部组合，验证"取出来的字段能原位放回去"：
+    //        mxs_unshift( mxs_align(src, mxs) ) 命中掩码的位 == src 的同名位
+    //      （DMUX 的掩码回填就是靠这条性质：只回填被指令搬过的位，其余位保持 RF 原值）
+    task automatic mxs_selftest(output bit ok);
+        logic [15:0] src [2];
+        logic [15:0] lane, val, msk;
+        logic [14:0] mxs;
+        int          n_case;
+        ok = 1'b1;
+        n_case = 0;
+        src[0] = 16'hABCD;
+        src[1] = 16'h1357;
+        lane = mxs_align(16'hABCD, mux_mxs_pack(4'd5, 1'b0, 3'd1, 3'd7, 1'b1, 3'd1));
+        if (lane !== 16'h50CC) begin
+            ok = 1'b0;
+            $display("MXS_SELFTEST 例子不符：lane=%h（期望 50CC）", lane);
+        end
+        for (int i = 0; i < 2; i++)
+            for (int b0 = 0; b0 < 16; b0++)
+                for (int lr0 = 0; lr0 < 2; lr0++)
+                    for (int s0 = 0; s0 < 8; s0++)
+                        for (int b1 = 0; b1 < 8; b1++)
+                            for (int lr1 = 0; lr1 < 2; lr1++)
+                                for (int s1 = 0; s1 < 8; s1++) begin
+                                    mxs = mux_mxs_pack(b0[3:0], lr0[0], s0[2:0], b1[2:0], lr1[0], s1[2:0]);
+                                    lane = mxs_align(src[i], mxs);
+                                    mxs_unshift(lane, mxs, val, msk);
+                                    n_case++;
+                                    if ((val & msk) !== (src[i] & msk)) begin
+                                        ok = 1'b0;
+                                        if (n_case < 8)
+                                            $display("MXS_SELFTEST 往返不符：src=%h mxs=%h val&msk=%h src&msk=%h",
+                                                     src[i], mxs, val & msk, src[i] & msk);
+                                    end
+                                end
+        $display("MXS_SELFTEST %0d 组往返 %s（例子 0xABCD→%h）", n_case, ok ? "OK" : "FAIL",
+                 mxs_align(16'hABCD, mux_mxs_pack(4'd5, 1'b0, 3'd1, 3'd7, 1'b1, 3'd1)));
+    endtask
+
     // ---- 发一个 KO（程序基址固定 ts 行 0；同拍带 csr 预发射口）----
     task automatic send_ko(input logic [2:0] pri, input logic [7:0] da,
                            input logic [5:0] thid, input logic [3:0] strb,
@@ -182,11 +241,13 @@ module tb_top;
     // ---- 主流程 ----
     initial begin
         bit pre_ok;
+        bit mxs_ok;
         rst_n = 1'b0;
         repeat (4) @(posedge clk);
         rst_n = 1'b1;
         @(posedge clk);
 
+        mxs_selftest(mxs_ok);          // MXS 取值/回填语义自检（不依赖平台时序）
         preload_imem();
         preload_mux_imem();
 
@@ -215,10 +276,10 @@ module tb_top;
                  (cw_entry(1,1) === 44'd0) &&      // strb=0 的项保持清零
                  (cw_entry(1,2) === PRE_DATA1[2*44 +: 44]) &&
                  (cw_entry(1,3) === 44'd0);
-        if (err_cnt == 0 && chk_cnt >= 4 && ko_cnt == 2 && done_cnt == 2 && pre_ok)
+        if (err_cnt == 0 && chk_cnt >= 4 && ko_cnt == 2 && done_cnt == 2 && pre_ok && mxs_ok)
             $display("SMOKE PASS");
-        else $display("SMOKE FAIL (chk=%0d err=%0d ko=%0d done=%0d pre_ok=%0b)",
-                      chk_cnt, err_cnt, ko_cnt, done_cnt, pre_ok);
+        else $display("SMOKE FAIL (chk=%0d err=%0d ko=%0d done=%0d pre_ok=%0b mxs_ok=%0b)",
+                      chk_cnt, err_cnt, ko_cnt, done_cnt, pre_ok, mxs_ok);
         $finish;
     end
 
