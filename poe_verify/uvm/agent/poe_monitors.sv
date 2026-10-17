@@ -1,4 +1,4 @@
-// DUT 侧 monitor：ts 边界两张表 + 线程结束 + 出口 KO + EU 错误标志
+// DUT 侧 monitor：观测事件总线（ts_done 快照）+ 出口 KO + EU 错误标志
 class poe_dut_monitor extends uvm_monitor;
     uvm_analysis_port #(poe_ev_item) ap_csr, ap_rf, ap_ko, ap_err;  // CSR / RF / KO / ERR 分开
     virtual poe_if vif;
@@ -17,20 +17,21 @@ class poe_dut_monitor extends uvm_monitor;
         vif = poe_uvm_pkg::g_vif;
         forever begin
             @(posedge vif.clk);
-            if (vif.ts_done_vld) begin
+            // 平台在 ts_done 后一拍给出观测快照（该线程整份 RF/CSR）
+            if (vif.obs_vld) begin
                 // ① CSR 事件（整份 CSR 按字节）
                 it = poe_ev_item::type_id::create("csr_dut");
                 it.kind = poe_ev_item::EV_CSR;
-                it.tid  = int'(vif.ts_done_tid);
-                it.ts   = int'(vif.ts_done_idx);
-                it.csr  = vif.csr_dut[it.tid*POE_CSR_BYTES*8 +: POE_CSR_BYTES*8];
+                it.tid  = int'(vif.obs_tid);
+                it.ts   = int'(vif.obs_ts);
+                it.csr  = vif.obs_csr;
                 ap_csr.write(it);
                 // ② RF 事件（整份 RF）
                 it = poe_ev_item::type_id::create("rf_dut");
                 it.kind = poe_ev_item::EV_RF;
-                it.tid  = int'(vif.ts_done_tid);
-                it.ts   = int'(vif.ts_done_idx);
-                it.rf   = vif.rf_dut[it.tid*POE_RF_W +: POE_RF_W];
+                it.tid  = int'(vif.obs_tid);
+                it.ts   = int'(vif.obs_ts);
+                it.rf   = vif.obs_rf;
                 ap_rf.write(it);
             end
             if (vif.out_vld) begin
@@ -52,7 +53,7 @@ class poe_dut_monitor extends uvm_monitor;
     endtask
 endclass
 
-// RM 侧 monitor：同样的 ts 边界两张表 + 出口 KO（RM 的期望值）
+// RM 侧 monitor：同样的观测事件总线 + 出口 KO（RM 的期望值）
 class poe_rm_monitor extends uvm_monitor;
     uvm_analysis_port #(poe_ev_item) ap_csr, ap_rf, ap_ko, ap_err;
     virtual poe_if vif;
@@ -71,18 +72,18 @@ class poe_rm_monitor extends uvm_monitor;
         vif = poe_uvm_pkg::g_vif;
         forever begin
             @(posedge vif.clk);
-            if (vif.ts_done_vld_rm) begin
+            if (vif.obs_vld_rm) begin
                 it = poe_ev_item::type_id::create("csr_rm");
                 it.kind = poe_ev_item::EV_CSR;
-                it.tid  = int'(vif.ts_done_tid_rm);
-                it.ts   = int'(vif.ts_done_idx_rm);
-                it.csr  = vif.csr_rm[it.tid*POE_CSR_BYTES*8 +: POE_CSR_BYTES*8];
+                it.tid  = int'(vif.obs_tid_rm);
+                it.ts   = int'(vif.obs_ts_rm);
+                it.csr  = vif.obs_csr_rm;
                 ap_csr.write(it);
                 it = poe_ev_item::type_id::create("rf_rm");
                 it.kind = poe_ev_item::EV_RF;
-                it.tid  = int'(vif.ts_done_tid_rm);
-                it.ts   = int'(vif.ts_done_idx_rm);
-                it.rf   = vif.rf_rm[it.tid*POE_RF_W +: POE_RF_W];
+                it.tid  = int'(vif.obs_tid_rm);
+                it.ts   = int'(vif.obs_ts_rm);
+                it.rf   = vif.obs_rf_rm;
                 ap_rf.write(it);
             end
             if (vif.out_vld_rm) begin

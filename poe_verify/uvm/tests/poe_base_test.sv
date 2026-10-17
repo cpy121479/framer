@@ -109,6 +109,8 @@ class poe_base_test extends uvm_test;
     task run_phase(uvm_phase phase);
         poe_ko_seq seq;
         int done_cnt = 0;
+        // 平台按 ts_done 事件给快照；这里按 tid 存最后一份，供 CW/CCR 自检
+        bit [POE_CSR_BYTES*8-1:0] csr_obs [64];
         phase.raise_objection(this);
         load_imem();
         load_mux_imem();
@@ -121,6 +123,8 @@ class poe_base_test extends uvm_test;
         // 等 2 个线程都结束（thr_done 是单拍脉冲，边沿计数）
         while (done_cnt < 2) begin
             @(posedge poe_uvm_pkg::g_vif.clk);
+            if (poe_uvm_pkg::g_vif.obs_vld)
+                csr_obs[poe_uvm_pkg::g_vif.obs_tid] = poe_uvm_pkg::g_vif.obs_csr;
             if (poe_uvm_pkg::g_vif.thr_done_vld) done_cnt++;
         end
         repeat (20) @(posedge poe_uvm_pkg::g_vif.clk);
@@ -128,8 +132,7 @@ class poe_base_test extends uvm_test;
         for (int i = 0; i < int'(seq.n_ko); i++)
             for (int e = 0; e < 4; e++)
                 if (seq.pre_strb_q[i][e])
-                    if (poe_uvm_pkg::g_vif.csr_dut[(int'(seq.pre_thid_q[i])*POE_CSR_BYTES
-                                                    + int'(A_CW_CMD))*8 + e*44 +: 44]
+                    if (csr_obs[seq.pre_thid_q[i]][int'(A_CW_CMD)*8 + e*44 +: 44]
                         !== seq.pre_data_q[i][e*44 +: 44])
                         `uvm_error("PRE_CW", $sformatf("tid=%0d CW 表项%0d 不符",
                                    seq.pre_thid_q[i], e))

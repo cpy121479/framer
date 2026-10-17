@@ -67,12 +67,14 @@ module poe_platform #(
     output logic [3:0]       err_out,         // EU 回传的按线程错误标志
     output logic             eu_err_vld,      // EU 错误标志有效拍（= EU 结果拍）
     output logic [TID_W-1:0] eu_err_tid,      // 错误属于哪个线程
-    // ---- 两张表（观测/比对用，扁平化：按 tid 切片）----
-    output logic [N_THR*RF_W-1:0] rf_flat,    // 每线程 RF：tid*RF_W +: RF_W
-    output logic [N_THR*CSRB*8-1:0] csr_flat, // 每线程 CSR 全表（按字节）：tid*CSRB*8 +: CSRB*8
-    output logic [N_THR*32-1:0]   ccr_flat,   // 每线程 CCR（= EU 的 mstatus 低 16bit）：tid*32 +: 16
-    output logic [N_THR*8-1:0]    th_stat_flat, // 每线程 TH_STAT：tid*8 +: 8
-    output logic [N_THR*8-1:0]    cur_ts_flat   // 每线程 CUR_TS（程序指针）：tid*8 +: 8
+    // ---- 观测：ts_done 事件总线（每次事件锁存"该线程"的 RF/CSR 快照，不再铺全表）----
+    output logic             obs_vld,         // 观测快照有效（ts_done 的下拍，一拍）
+    output logic [TID_W-1:0] obs_tid,         // 快照属于哪个线程
+    output logic [TS_W-1:0]  obs_ts,          // 快照对应哪个 ts（= ts_done_idx）
+    output logic [RF_W-1:0]  obs_rf,          // 该线程整份 RF（256B）
+    output logic [CSRB*8-1:0] obs_csr,        // 该线程整份 CSR（90B，含 0x2 CCR 镜像与 CW 窗）
+    // ---- 小表：线程池结束判定要连续看每个线程的 TH_STAT（64×8bit，不占波形）----
+    output logic [N_THR*8-1:0] th_stat_flat   // 每线程 TH_STAT：tid*8 +: 8
 );
     // ---- 宏指令存储（= burst 存储）----
     logic [N_THR*TS_W-1:0]     rd_ts_flat;   // 每线程取指行号（池组合输出）
@@ -135,7 +137,11 @@ module poe_platform #(
     logic [15:0]          dmux_ccr_wdata;    //   要写回的 2B
     logic [N_THR*KO_LO_W-1:0] ko_lo_flat;    // 入口 KO 低 16B（每线程一份，供 DMUX 再生出口 KO）
 
-    logic [N_THR*CSRB*8-1:0] csr_flat_w;     // CSR 全表（按字节），来自 poe_thread_bank
+    // ---- 上下文存储读口（功能用单线程，事件用单快照）----
+    logic [CSRB*8-1:0] csr_rd;               // 该线程整份 CSR（MUX/EU/DMUX 共用）
+    logic [TID_W-1:0]  evt_rtid;             // 事件读口：ts_done 属于哪个线程
+    logic [RF_W-1:0]   evt_rf;               // ts_done 线程的 RF 快照（组合读）
+    logic [CSRB*8-1:0] evt_csr;              // ts_done 线程的 CSR 快照（组合读）
 
     // ---- 宏指令存储（只读 ROM；每线程一个组合读口）----
     poe_burst_imem #(
@@ -222,10 +228,14 @@ module poe_platform #(
         .csr_waddr(csr_waddr),
         .csr_ww(csr_ww),
         .csr_wdata(csr_wdata),
+        .csr_rtid(mux_csr_rtid),        // 功能读口：MUX 给出当前 task 的 tid
+        .csr_rd(csr_rd),                //   → MUX/EU/DMUX 共用这一份
         .rf_rd_tid(mux_rf_rd_tid),      // MUX 读整份 RF
         .rf_rd(mux_rf_rd),
-        .rf_flat(rf_flat),
-        .csr_flat(csr_flat_w)
+        .evt_rtid(evt_rtid),            // 事件读口：ts_done 线程
+        .evt_rf(evt_rf),
+        .evt_csr(evt_csr),
+        .th_stat_flat(th_stat_flat)     // 线程池功能用（64×8bit）
     );
 
     // ---- MUX 指令存储（TB/test 预载，与微指令画像配套）----
@@ -260,7 +270,7 @@ module poe_platform #(
         .ccr_rtid      (mux_ccr_rtid),
         .ccr_rd        (mux_ccr_rd),
         .csr_rtid      (mux_csr_rtid),
-        .csr_snap      (csr_flat_w[mux_csr_rtid*CSRB*8 +: CSRB*8]),
+        .csr_snap      (csr_rd),
         .win_vld       (mux_win_vld),
         .win_tid       (mux_win_tid),
         .win_sub_pc    (mux_win_sub_pc),
@@ -292,7 +302,7 @@ module poe_platform #(
         .win_out    (eu_win_out),               // EU 处理后的 64B 窗
         .ccr_out    (eu_ccr_out),               // EU 写回的 2B CCR
         .rf_rd      (mux_rf_rd),                // 该线程 RF 原值（掩码保护）
-        .csr_snap   (csr_flat_w[mux_ctx_tid*CSRB*8 +: CSRB*8]),  // 读 MUX_PTR
+        .csr_snap   (csr_rd),                                   // 读 MUX_PTR（同一 task 的 tid）
         .ko_lo      (ko_lo_flat[mux_ctx_tid*KO_LO_W +: KO_LO_W]),// 入口 KO 低 16B
         .rf_we      (dmux_rf_we),
         .rf_tid     (dmux_rf_tid),
@@ -307,18 +317,28 @@ module poe_platform #(
         .out_tid    (out_tid)
     );
 
-    // CSR 全表直出到端口（验证侧按地址表切）；另外切出 ccr/th_stat/cur_ts 三个常用字段
-    assign csr_flat = csr_flat_w;
     // EU 的错误标志随结果波前同拍有效（契约见 poe_eu_rm 文件头）
     assign eu_err_vld = eu_done;
     assign eu_err_tid = eu_done_tid;
-    always_comb begin
-        for (int t = 0; t < N_THR; t++) begin
-            // 小端：低字节在低地址（0x2 CCR / 0xa TH_STAT / 0xf CUR_TS）
-            ccr_flat[t*32 +: 16]   = {csr_flat_w[(t*CSRB + int'(A_CCR) + 1)*8 +: 8],
-                                      csr_flat_w[(t*CSRB + int'(A_CCR))*8 +: 8]};
-            th_stat_flat[t*8 +: 8] = csr_flat_w[(t*CSRB + int'(A_TH_STAT))*8 +: 8];
-            cur_ts_flat[t*8 +: 8]  = csr_flat_w[(t*CSRB + int'(A_CUR_TS))*8 +: 8];
+
+    // ---- 观测事件总线：ts_done 拍把"该线程"的 RF/CSR 快照锁存一拍 ----
+    //   池子每拍最多一个 ts_done 事件，所以一条总线就够；monitor/checker 在 obs_vld 拍取走。
+    assign evt_rtid = ts_done_tid;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            obs_vld <= 1'b0;
+            obs_tid <= '0;
+            obs_ts  <= '0;
+            obs_rf  <= '0;
+            obs_csr <= '0;
+        end else begin
+            obs_vld <= ts_done_vld;               // 事件后一拍给出，数据与 vld 同拍稳定
+            if (ts_done_vld) begin
+                obs_tid <= ts_done_tid;
+                obs_ts  <= ts_done_idx;
+                obs_rf  <= evt_rf;                // 该线程整份 RF（256B）
+                obs_csr <= evt_csr;               // 该线程整份 CSR（90B，含 CCR 镜像/CW 窗）
+            end
         end
     end
 
@@ -338,7 +358,7 @@ module poe_platform #(
                 .win_we(),
                 .ccr_in(mux_win_ccr),
                 .ccr_out(eu_ccr_out),
-                .csr_snap(csr_flat_w[mux_win_tid*CSRB*8 +: CSRB*8]),
+                .csr_snap(csr_rd),
                 .csr_we(eu_csr_we),
                 .csr_wtid(eu_csr_wtid),
                 .csr_waddr(eu_csr_waddr),
@@ -366,7 +386,7 @@ module poe_platform #(
                 .win_we(),
                 .ccr_in(mux_win_ccr),
                 .ccr_out(eu_ccr_out),
-                .csr_snap(csr_flat_w[mux_win_tid*CSRB*8 +: CSRB*8]),
+                .csr_snap(csr_rd),
                 .csr_we(eu_csr_we),
                 .csr_wtid(eu_csr_wtid),
                 .csr_waddr(eu_csr_waddr),

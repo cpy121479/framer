@@ -2,7 +2,8 @@
 // 平台接口（UVM 侧唯一的激励/观测契约）
 //   激励：KO 48B + 随路 pre_read 96bit（driver 驱动本接口，顶层分叉给两套平台）
 //   预载：只有微指令（EU 内两级 bank）；burst 指令存储是 ROM，模块内部 initial 拼镜像
-//   观测：DUT / RM 两侧的 ts 边界事件、线程结束、出口 KO、两张表快照
+//   观测：DUT / RM 两侧的 ts_done **事件快照**（obs_vld/obs_tid/obs_ts/obs_rf/obs_csr）、
+//        线程结束、出口 KO、EU 错误标志（不再铺 64 线程全表，波形友好）
 // ============================================================================
 interface poe_if (
     input logic clk,              // 时钟
@@ -48,9 +49,12 @@ interface poe_if (
     logic         eu_err_vld;     // DUT 侧错误标志有效
     logic [5:0]   eu_err_tid;     // DUT 侧错误属于哪个线程
     logic [3:0]   eu_err;         // DUT 侧错误标志
-    logic [N_THR*RF_W-1:0] rf_dut;// DUT 侧全表 RF：tid*RF_W +: RF_W
-    logic [N_THR*CSRB*8-1:0] csr_dut; // DUT 侧 CSR 全表（按字节）：tid*CSRB*8 +: CSRB*8
-    logic [N_THR*32-1:0]   ccr_dut;// DUT 侧全表 CCR：tid*32 +: 16
+    // ---- 观测事件总线（DUT 侧）：ts_done 后一拍锁存"该线程"的整份 RF/CSR ----
+    logic         obs_vld;        // 快照有效（一拍）
+    logic [TID_W-1:0] obs_tid;    // 快照属于哪个线程
+    logic [TS_W-1:0]  obs_ts;     // 是哪个 ts
+    logic [RF_W-1:0]  obs_rf;     // 该线程整份 RF（256B）
+    logic [CSRB*8-1:0] obs_csr;   // 该线程整份 CSR（90B，含 0x2 CCR 镜像与 CW 窗）
     // ---- RM 侧观测（期望值）----
     logic         out_vld_rm;     // RM 出口 KO 有效
     logic [383:0] out_data_rm;    // RM 出口 48B
@@ -58,9 +62,12 @@ interface poe_if (
     logic         ts_done_vld_rm; // RM 侧 ts 边界事件
     logic [TID_W-1:0] ts_done_tid_rm; // 该 ts 属于哪个线程
     logic [TS_W-1:0] ts_done_idx_rm; // 第几个 ts
-    logic [N_THR*RF_W-1:0] rf_rm; // RM 侧全表 RF
-    logic [N_THR*CSRB*8-1:0] csr_rm;  // RM 侧 CSR 全表（按字节）
-    logic [N_THR*32-1:0]   ccr_rm;// RM 侧全表 CCR
+    // ---- 观测事件总线（RM 侧，期望值）----
+    logic         obs_vld_rm;     // 快照有效（一拍）
+    logic [TID_W-1:0] obs_tid_rm; // 快照属于哪个线程
+    logic [TS_W-1:0]  obs_ts_rm;  // 是哪个 ts
+    logic [RF_W-1:0]  obs_rf_rm;  // 该线程整份 RF
+    logic [CSRB*8-1:0] obs_csr_rm;// 该线程整份 CSR
     // ---- RM 侧 EU 错误标志 ----
     logic         eu_err_vld_rm;  // RM 侧错误标志有效
     logic [5:0]   eu_err_tid_rm;  // RM 侧错误属于哪个线程

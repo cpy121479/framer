@@ -67,10 +67,16 @@ module poe_thread_bank #(
     input  logic [6:0]       csr_waddr,       // 写地址（字节偏移）
     input  logic [2:0]       csr_ww,          // 写位宽码
     input  logic [383:0]     csr_wdata,       // 写数据（低位对齐）
-    input  logic [TID_W-1:0] rf_rd_tid,       // MUX 要读哪个线程的 RF
-    output logic [RF_W-1:0]  rf_rd,           // 该线程整份 256B RF（组合读）
-    output logic [N_THR*RF_W-1:0]   rf_flat,  // 全表 RF
-    output logic [N_THR*CSRB*8-1:0] csr_flat  // 全表 CSR（按字节：tid*CSRB*8 +: CSRB*8）
+    // ---- 功能读口：MUX / EU 壳 / DMUX 共用（同一 task 期间三者要的是同一个 tid）----
+    input  logic [TID_W-1:0]  csr_rtid,       // 读哪个线程的 CSR 全表
+    output logic [CSRB*8-1:0] csr_rd,         // 该线程整份 CSR（0x00..0x59，组合读）
+    input  logic [TID_W-1:0]  rf_rd_tid,      // MUX 要读哪个线程的 RF
+    output logic [RF_W-1:0]   rf_rd,          // 该线程整份 256B RF（组合读）
+    // ---- 事件采样读口：ts_done 拍抓一份"该线程"的快照给观测总线 ----
+    input  logic [TID_W-1:0]  evt_rtid,       // ts_done 属于哪个线程
+    output logic [RF_W-1:0]   evt_rf,         // 该线程整份 RF（组合读）
+    output logic [CSRB*8-1:0] evt_csr,        // 该线程整份 CSR（组合读）
+    output logic [N_THR*8-1:0] th_stat_flat   // 每线程 TH_STAT（线程池功能用：64×8bit）
 );
     // ---- 地址常量（与文件头表一致；验证侧 poe_uvm_pkg 有同一份表）----
 
@@ -192,14 +198,24 @@ module poe_thread_bank #(
         end
     end
 
-    // ---- 观测扁平化 ----
+    // ---- 单个线程的 CSR 全表视图：前 0x2e 字节走字节数组，0x2e 起是 44bit 表项的 CW 窗 ----
+    function automatic logic [CSRB*8-1:0] csr_view(input logic [TID_W-1:0] tid);
+        csr_view = '0;
+        for (int b = 0; b < CWB; b++)
+            csr_view[b*8 +: 8] = csr[tid][b];
+        for (int b = 0; b < CW_N*CW_W/8; b++)
+            csr_view[(CWB + b)*8 +: 8] = cw[tid][b*8 +: 8];
+    endfunction
+
+    // 功能读口（MUX 解 MUX_PTR / EU 读整表 / DMUX 解 MUX_PTR）
+    assign csr_rd  = csr_view(csr_rtid);
+    // 事件快照读口（平台在 ts_done 拍锁存成观测总线）
+    assign evt_rf  = rf[evt_rtid];
+    assign evt_csr = csr_view(evt_rtid);
+
+    // 线程池判断线程结束要连续看每个线程的 TH_STAT（只有 64×8bit，不占波形）
     always_comb begin
-        for (int t = 0; t < N_THR; t++) begin
-            rf_flat[t*RF_W +: RF_W] = rf[t];
-            for (int b = 0; b < CWB; b++)
-                csr_flat[(t*CSRB + b)*8 +: 8] = csr[t][b];
-            for (int b = 0; b < CW_N*CW_W/8; b++)
-                csr_flat[(t*CSRB + CWB + b)*8 +: 8] = cw[t][b*8 +: 8];
-        end
+        for (int t = 0; t < N_THR; t++)
+            th_stat_flat[t*8 +: 8] = csr[t][int'(A_TH_STAT)];
     end
 endmodule

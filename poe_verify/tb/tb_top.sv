@@ -36,9 +36,13 @@ module tb_top;
     logic [3:0]   ts_done_idx;
     logic [7:0]   ct_skip_cnt;
     int           chk_cnt, err_cnt, err_chk;
-    logic [64*2048-1:0] rf_dut, rf_rm;
-    logic [64*32-1:0]   ccr_dut, ccr_rm;
-    logic [64*CSRB*8-1:0] csr_dut;    // DUT 全表 CSR（看 CW 窗 = 预发射口写的低 4 项）
+    // DUT 侧观测事件总线（ts_done 后一拍锁存该线程的快照）
+    logic             obs_vld;
+    logic [5:0]       obs_tid;
+    logic [3:0]       obs_ts;
+    logic [2047:0]    obs_rf;
+    logic [CSRB*8-1:0] obs_csr;
+    logic [CSRB*8-1:0] csr_obs [64];  // 每线程最后一次 ts_done 的 CSR 快照（自检 CW/CCR 用）
     int           ko_cnt, done_cnt;   // 出口 KO / 线程结束计数
     // 预发射口写入的 4×44bit（表项 0 在最低 44bit）
     localparam logic [175:0] PRE_DATA0 = {44'h05555AAAA55, 44'h0FEDCBA9876,
@@ -76,14 +80,14 @@ module tb_top;
         .thr_done_tid(thr_done_tid),
         .busy(busy),
         .ct_skip_cnt(ct_skip_cnt),
-        .csr_dut_flat(csr_dut),
         .chk_cnt(chk_cnt),
         .err_chk(err_chk),
         .err_cnt(err_cnt),
-        .rf_dut_flat(rf_dut),
-        .rf_rm_flat(rf_rm),
-        .ccr_dut_flat(ccr_dut),
-        .ccr_rm_flat(ccr_rm)
+        .obs_vld(obs_vld),
+        .obs_tid(obs_tid),
+        .obs_ts(obs_ts),
+        .obs_rf(obs_rf),
+        .obs_csr(obs_csr)
     );
 
     // ---- 指令编码小工具（微指令画像用）----
@@ -173,9 +177,22 @@ module tb_top;
         end
     end
 
+    // ---- 每个 ts_done 事件抓一份该线程的 CSR 快照（最小的实现：每 tid 存最后一份）----
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            for (int t = 0; t < 64; t++) csr_obs[t] <= '0;
+        end else if (obs_vld) begin
+            csr_obs[obs_tid] <= obs_csr;
+        end
+    end
+
     // ---- CW 窗表项读口（自检用）：tid 线程的第 e 项（CSR 0x2e 起，每项 44bit）----
     function automatic logic [43:0] cw_entry(input int tid, input int e);
-        cw_entry = csr_dut[(tid*CSRB + CW_BYTE)*8 + e*44 +: 44];
+        cw_entry = csr_obs[tid][CW_BYTE*8 + e*44 +: 44];
+    endfunction
+    // ---- CCR 读口（自检用）：CSR 0x2 的 16bit 镜像 ----
+    function automatic logic [15:0] ccr_entry(input int tid);
+        ccr_entry = csr_obs[tid][8*int'(A_CCR) +: 16];
     endfunction
 
     // ---- MXS 语义自检（MUX 取值 ↔ DMUX 回填的往返一致性）----
@@ -260,14 +277,15 @@ module tb_top;
         repeat (4) @(posedge clk);
 
         $display("---- 结果 ----");
-        $display("CHK ts 边界=%0d  err=%0d  出口KO=%0d  线程结束=%0d（ts 粒度：RF 逐槽 + CCR；出口 KO：DUT vs RM）",
+        $display("CHK ts 边界=%0d  err=%0d  出口KO=%0d  线程结束=%0d（ts 粒度：RF 逐槽 + CSR 整表；出口 KO：DUT vs RM）",
                  chk_cnt, err_cnt, ko_cnt, done_cnt);
         $display("c_task 跳过数=%0d", ct_skip_cnt);
         $display("EU err 检查 %0d 次（示例模型期望全 0）", err_chk);
         $display("tid0 CW 低4项 = %h %h %h %h", cw_entry(0,0), cw_entry(0,1), cw_entry(0,2), cw_entry(0,3));
         $display("tid1 CW 低4项 = %h %h %h %h", cw_entry(1,0), cw_entry(1,1), cw_entry(1,2), cw_entry(1,3));
-        $display("tid0 CCR dut=%h rm=%h", ccr_dut[0*32 +: 32], ccr_rm[0*32 +: 32]);
-        $display("tid1 CCR dut=%h rm=%h", ccr_dut[1*32 +: 32], ccr_rm[1*32 +: 32]);
+        // CCR 的 DUT/RM 比对在 checker 里按整份 CSR 做，这里只打印 DUT 侧便于对照
+        $display("tid0 CCR=%h", ccr_entry(0));
+        $display("tid1 CCR=%h", ccr_entry(1));
         pre_ok = (cw_entry(0,0) === PRE_DATA0[0*44 +: 44]) &&
                  (cw_entry(0,1) === PRE_DATA0[1*44 +: 44]) &&
                  (cw_entry(0,2) === PRE_DATA0[2*44 +: 44]) &&

@@ -13,11 +13,11 @@ KO 48B + csr 预发射口
        │                  累积 32B O 窗；线程结束 → 出口 KO = {O 窗 32B, 入口 KO 低 16B}
        ├ poe_thread_bank  每线程一份 CSR + RF(256B) + CCR(32B) 表
        └ 共享一份 EU（poe_eu_dut = 替换点 / poe_eu_rm = 参考模型），64B 窗口 + 2B CCR 进出
-   → ts_done / thr_done 事件 + 出口 KO（由 DMUX 直出）
+   → ts_done / thr_done 事件 + 观测事件总线（该线程 RF/CSR 快照）+ 出口 KO（由 DMUX 直出）
 ```
 
 DUT 侧与 RM 侧各例化一套平台，同一个激励在顶层广播给两侧；
-ts 粒度比对 CSR/RF 两张表，按 `(tid, ts)` 配对，出口 KO 按 tid 配对。
+ts 粒度比对 CSR/RF 快照，按 `(tid, ts)` 配对，出口 KO 按 tid 配对。
 
 ## 目录
 
@@ -59,6 +59,11 @@ TESTNAME=poe_base_test ./run_uvm.sh     # UVM：2 个 KO，(tid,ts) 配对比对
   建线程拍预写 CW 窗低 4 项。
 - **退出**：出口 KO 由 **DMUX 直出** = `{O 窗 32B（放高 32B）, 入口 KO 低 16B（原样保持）}`，
   **DA/SA 对调与透传已作废**；线程结束写在 CSR `0xa TH_STAT=DONE`，出口 KO 被取走后才释放槽位。
+- **观测事件总线（波形友好）**：平台不再铺 `64×RF(256B) + 64×CSR(90B)` 的全表快照；
+  每个 `ts_done` 事件锁存一份**该线程**的快照：
+  `obs_vld / obs_tid / obs_ts / obs_rf(2048bit) / obs_csr(720bit)`（约 2.8kbit，一拍有效）。
+  UVM monitor 在 `obs_vld` 拍直接取走；RTL checker 比 DUT/RM 两份事件（要求同拍、同 tid、同 ts）。
+  线程池功能需要的 `TH_STAT` 仍保留一张小表 `64×8bit`（不属于观测总线）。
 - **两级存储**：宏指令存储是只读 ROM（模块内部 initial 拼镜像，无写口）；
   微指令存储（EU 内）与 MUX 指令存储都需要 TB/test 预载。
 - **MUX/DMUX 指令行**（一行 = 一个 `sub_pc` 的完整画像，1280bit，布局唯一定义在 `poe_pkg` ⑤ 节）：

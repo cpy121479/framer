@@ -58,11 +58,12 @@ module uvm_tb_top;
         .err_out(u_if.eu_err),                            // EU 错误标志（随结果拍有效）
         .eu_err_vld(u_if.eu_err_vld),
         .eu_err_tid(u_if.eu_err_tid),
-        .rf_flat(u_if.rf_dut),                            // 两张表快照
-        .csr_flat(u_if.csr_dut),                          //   CSR 全表（按字节）
-        .ccr_flat(u_if.ccr_dut),
-        .th_stat_flat(),                                  // 本版不采
-        .cur_ts_flat()
+        .obs_vld(u_if.obs_vld),                           // 观测事件总线（DUT 侧）
+        .obs_tid(u_if.obs_tid),
+        .obs_ts(u_if.obs_ts),
+        .obs_rf(u_if.obs_rf),
+        .obs_csr(u_if.obs_csr),
+        .th_stat_flat()                                   // 本版不采
     );
 
     // ---- RM 平台（内部 EU = poe_eu_rm；同一个激励，只回刷自己的表）----
@@ -99,11 +100,12 @@ module uvm_tb_top;
         .err_out(u_if.eu_err_rm),
         .eu_err_vld(u_if.eu_err_vld_rm),
         .eu_err_tid(u_if.eu_err_tid_rm),
-        .rf_flat(u_if.rf_rm),                             // RM 侧两张表
-        .csr_flat(u_if.csr_rm),
-        .ccr_flat(u_if.ccr_rm),
-        .th_stat_flat(),
-        .cur_ts_flat()
+        .obs_vld(u_if.obs_vld_rm),                        // 观测事件总线（RM 侧）
+        .obs_tid(u_if.obs_tid_rm),
+        .obs_ts(u_if.obs_ts_rm),
+        .obs_rf(u_if.obs_rf_rm),
+        .obs_csr(u_if.obs_csr_rm),
+        .th_stat_flat()                                   // RM 侧不需要（池子功能在各自平台内）
     );
 
     // ---- 两侧 ready 取与：两侧都 ready 才算能收 ----

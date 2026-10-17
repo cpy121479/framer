@@ -106,6 +106,9 @@ UVM：    CSR 4 次错 0；RF 4 次错 0；出口 KO 2 次错 0；EU 错误标�
 
 ## 6. 注意
 
+- **观测接口**：平台输出 `ts_done` **事件快照总线** `obs_vld/obs_tid/obs_ts/obs_rf(2048b)/obs_csr(720b)`
+  （约 2.8kbit，一拍有效），不再有 64 线程全表快照；UVM monitor 和 RTL checker 都在 `obs_vld` 拍取。
+  线程池功能用的 `th_stat_flat` 仍是一张 `64×8bit` 小表，不属于观测总线。
 - `eu/` 是 sa-studio 生成的 rv32i 参考模型，DUT/RM 两个壳内部都例化同一份 —— 所以今天
   DUT vs RM 比对通过只代表"自洽"，接真实 EU 后才开始真验证。
 - 接真实 EU 时**只改 `rtl/poe_eu_dut.sv`**，替换步骤见 `README.md` 的"接真实 EU 的替换清单"。

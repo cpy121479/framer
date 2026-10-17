@@ -67,7 +67,7 @@ package poe_pkg;
     //   0x12  8b MUX_C      0x13  2b LK_SET    0x14 16b LK_TAG     0x16 64b MUX_PTR
     //   0x1e 128b CW_MUX    0x2e 352b CW_CMD
     //   总空间 0x00..0x59（90 字节）
-    //   注：CCR_MASK / MUX_C / CW_MUX 本版只做存储与观测（随 csr_flat 一起比对），
+    //   注：CCR_MASK / MUX_C / CW_MUX 本版只做存储与观测（随 ts_done 的 CSR 快照一起比对），
     //       平台暂时不消费它们的语义（真 EU 到位后按需建模）。
     localparam logic [6:0] A_ERR      = 7'h00;   // 16b 错误告警
     localparam logic [6:0] A_CCR      = 7'h02;   // 16b 条件寄存器（EU 读写；= mstatus 低 16bit）

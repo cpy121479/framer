@@ -56,11 +56,12 @@ module poe_verify_top #(
     output int               chk_cnt,         // 已完成的 ts 比对次数
     output int               err_chk,         // 已完成的 EU 错误标志检查次数
     output int               err_cnt,         // 累计错误数
-    output logic [N_THR*RF_W-1:0] rf_dut_flat,// DUT 全表 RF
-    output logic [N_THR*RF_W-1:0] rf_rm_flat, // RM 全表 RF
-    output logic [N_THR*32-1:0]   ccr_dut_flat, // DUT 全表 CCR
-    output logic [N_THR*32-1:0]   ccr_rm_flat,  // RM 全表 CCR
-    output logic [N_THR*CSRB*8-1:0] csr_dut_flat // DUT 全表 CSR（自检看 CW 窗，UVM 侧另有采样）
+    // ---- DUT 侧观测事件总线（ts_done 后一拍锁存；替代原来的全表快照）----
+    output logic             obs_vld,         // 快照有效（一拍）
+    output logic [TID_W-1:0] obs_tid,         // 属于哪个线程
+    output logic [TS_W-1:0]  obs_ts,          // 对应哪个 ts
+    output logic [RF_W-1:0]  obs_rf,          // 该线程整份 RF（256B）
+    output logic [CSRB*8-1:0] obs_csr         // 该线程整份 CSR（90B）
 );
     logic             ko_rdy_dut, ko_rdy_rm;   // 两侧各自 ready
     logic             out_vld_rm;              // RM 出口 KO 有效
@@ -69,7 +70,12 @@ module poe_verify_top #(
     logic [3:0]       err_dut, err_rm;         // 两侧 EU 错误标志
     logic             err_vld_dut, err_vld_rm; // 两侧错误标志有效拍
     logic [TID_W-1:0] err_tid_dut, err_tid_rm; // 两侧错误标志对应线程
-    logic [N_THR*8-1:0] th_stat_dut, cur_ts_dut, th_stat_rm;
+    logic [N_THR*8-1:0] th_stat_dut;           // DUT 侧 TH_STAT（线程结束自洽检查）
+    logic             obs_vld_rm;              // RM 侧观测快照有效
+    logic [TID_W-1:0] obs_tid_rm;              // RM 侧快照线程号
+    logic [TS_W-1:0]  obs_ts_rm;               // RM 侧快照 ts
+    logic [RF_W-1:0]  obs_rf_rm;               // RM 侧快照 RF
+    logic [CSRB*8-1:0] obs_csr_rm;             // RM 侧快照 CSR
 
     // ---- DUT 平台：控制流来源；出口 KO / 事件是被验对象 ----
     poe_platform #(
@@ -105,11 +111,12 @@ module poe_verify_top #(
         .err_out(err_dut),
         .eu_err_vld(err_vld_dut),
         .eu_err_tid(err_tid_dut),
-        .csr_flat(csr_dut_flat),     // 自检看 CW 窗（预发射口写进去的低 4 项）
-        .rf_flat(rf_dut_flat),
-        .ccr_flat(ccr_dut_flat),
-        .th_stat_flat(th_stat_dut),
-        .cur_ts_flat(cur_ts_dut)
+        .obs_vld(obs_vld),           // 观测事件总线（DUT 侧，ts_done 后一拍）
+        .obs_tid(obs_tid),
+        .obs_ts(obs_ts),
+        .obs_rf(obs_rf),
+        .obs_csr(obs_csr),
+        .th_stat_flat(th_stat_dut)
     );
 
     // ---- RM 平台：同一个激励；只回刷自己的表 ----
@@ -146,11 +153,12 @@ module poe_verify_top #(
         .err_out(err_rm),
         .eu_err_vld(err_vld_rm),
         .eu_err_tid(err_tid_rm),
-        .csr_flat(),                 // RM 侧 CSR 全表本路径不用（UVM 路径才采）
-        .rf_flat(rf_rm_flat),
-        .ccr_flat(ccr_rm_flat),
-        .th_stat_flat(th_stat_rm),
-        .cur_ts_flat()
+        .obs_vld(obs_vld_rm),        // RM 侧观测事件总线（给检查器做期望值）
+        .obs_tid(obs_tid_rm),
+        .obs_ts(obs_ts_rm),
+        .obs_rf(obs_rf_rm),
+        .obs_csr(obs_csr_rm),
+        .th_stat_flat()
     );
 
     // 两侧都 ready 才算接受这个 KO（同一个 driver 广播，必须同时收）
@@ -160,15 +168,18 @@ module poe_verify_top #(
     poe_checker #(.N_THR(N_THR), .TID_W(TID_W), .RF_W(RF_W)) u_chk (
         .clk(clk),
         .rst_n(rst_n),
-        .ts_done_vld(ts_done_vld),
-        .ts_done_tid(ts_done_tid),
-        .ts_done_idx(ts_done_idx),
+        .obs_vld_dut(obs_vld),
+        .obs_tid_dut(obs_tid),
+        .obs_ts_dut(obs_ts),
+        .obs_rf_dut(obs_rf),
+        .obs_csr_dut(obs_csr),
+        .obs_vld_rm(obs_vld_rm),
+        .obs_tid_rm(obs_tid_rm),
+        .obs_ts_rm(obs_ts_rm),
+        .obs_rf_rm(obs_rf_rm),
+        .obs_csr_rm(obs_csr_rm),
         .thr_done_vld(thr_done_vld),
         .thr_done_tid(thr_done_tid),
-        .rf_dut(rf_dut_flat),
-        .rf_rm(rf_rm_flat),
-        .ccr_dut(ccr_dut_flat),
-        .ccr_rm(ccr_rm_flat),
         .th_stat_dut(th_stat_dut),
         .err_vld_dut(err_vld_dut),                 // EU 错误标志（边界契约的一部分）
         .err_dut(err_dut),
