@@ -15,6 +15,7 @@ module uvm_tb_top;
     localparam int TS_MAX  = 16;     // burst 指令存储行数
     localparam int TS_W    = 4;      // ts 行号位宽
     localparam int N_BURST = 8;      // 每 ts 最多 burst 数
+    localparam bit RF_INIT_PATTERN = 1'b1;  // 建线程 RF 初值：1=非零测试图样，0=清零
 
     logic clk = 0, rst_n = 0;
     always #0.5ns clk = ~clk;
@@ -27,7 +28,8 @@ module uvm_tb_top;
     // ---- DUT 平台（内部 EU = poe_eu_dut，真实 RTL 的替换点）----
     poe_platform #(
         .IS_RM(1'b0), .N_THR(N_THR), .TID_W(TID_W), .RF_W(RF_W),
-        .TS_MAX(TS_MAX), .TS_W(TS_W), .N_BURST(N_BURST)
+        .TS_MAX(TS_MAX), .TS_W(TS_W), .N_BURST(N_BURST),
+        .RF_INIT_PATTERN(RF_INIT_PATTERN)
     ) u_plat_dut (
         .clk(clk),                                        // 时钟
         .rst_n(rst_n),                                    // 复位
@@ -69,7 +71,8 @@ module uvm_tb_top;
     // ---- RM 平台（内部 EU = poe_eu_rm；同一个激励，只回刷自己的表）----
     poe_platform #(
         .IS_RM(1'b1), .N_THR(N_THR), .TID_W(TID_W), .RF_W(RF_W),
-        .TS_MAX(TS_MAX), .TS_W(TS_W), .N_BURST(N_BURST)
+        .TS_MAX(TS_MAX), .TS_W(TS_W), .N_BURST(N_BURST),
+        .RF_INIT_PATTERN(RF_INIT_PATTERN)
     ) u_plat_rm (
         .clk(clk),
         .rst_n(rst_n),

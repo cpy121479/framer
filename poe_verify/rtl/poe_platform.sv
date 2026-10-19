@@ -30,7 +30,8 @@ module poe_platform #(
     parameter int WIN_W  = 512,    // 送 EU 的操作数窗口位宽；64B
     parameter int TS_MAX = 16,     // 宏指令存储行数（一行 = 一个 ts），即最长程序
     parameter int TS_W   = 4,      // ts 行号位宽；TS_MAX=16 → 4bit
-    parameter int N_BURST= 8       // 一个 ts 最多几条 burst（宏指令存储一行能放 8 条）
+    parameter int N_BURST= 8,      // 一个 ts 最多几条 burst（宏指令存储一行能放 8 条）
+    parameter bit RF_INIT_PATTERN = 1'b1  // 建线程 RF 初值：1=非零测试图样，0=清零
 ) (
     input  logic             clk,             // 1GHz 时钟
     input  logic             rst_n,           // 低有效异步复位
@@ -198,7 +199,12 @@ module poe_platform #(
     );
 
     // ---- 每线程一份 CSR + RF ----
-    poe_thread_bank #(.N_THR(N_THR), .TID_W(TID_W), .RF_W(RF_W)) u_bank (
+    poe_thread_bank #(
+        .N_THR(N_THR),
+        .TID_W(TID_W),
+        .RF_W(RF_W),
+        .RF_INIT_PATTERN(RF_INIT_PATTERN)
+    ) u_bank (
         .clk(clk),
         .rst_n(rst_n),
         .alloc(alloc),

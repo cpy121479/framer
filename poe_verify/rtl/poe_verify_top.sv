@@ -20,7 +20,8 @@ module poe_verify_top #(
     parameter int RF_W   = 2048,   // 每线程 RF 表位宽（256B = 64 槽 × 32bit）
     parameter int TS_MAX = 16,     // burst 指令存储行数（最长程序）
     parameter int TS_W   = 4,      // ts 行号位宽
-    parameter int N_BURST= 8       // 每 ts 最多 burst 数
+    parameter int N_BURST= 8,      // 每 ts 最多 burst 数
+    parameter bit RF_INIT_PATTERN = 1'b1  // 建线程 RF 初值：1=非零测试图样，0=清零
 ) (
     input  logic             clk,             // 时钟
     input  logic             rst_n,           // 低有效异步复位
@@ -80,7 +81,8 @@ module poe_verify_top #(
     // ---- DUT 平台：控制流来源；出口 KO / 事件是被验对象 ----
     poe_platform #(
         .IS_RM(1'b0), .N_THR(N_THR), .TID_W(TID_W), .RF_W(RF_W),
-        .TS_MAX(TS_MAX), .TS_W(TS_W), .N_BURST(N_BURST)
+        .TS_MAX(TS_MAX), .TS_W(TS_W), .N_BURST(N_BURST),
+        .RF_INIT_PATTERN(RF_INIT_PATTERN)
     ) u_plat_dut (
         .clk(clk),
         .rst_n(rst_n),
@@ -122,7 +124,8 @@ module poe_verify_top #(
     // ---- RM 平台：同一个激励；只回刷自己的表 ----
     poe_platform #(
         .IS_RM(1'b1), .N_THR(N_THR), .TID_W(TID_W), .RF_W(RF_W),
-        .TS_MAX(TS_MAX), .TS_W(TS_W), .N_BURST(N_BURST)
+        .TS_MAX(TS_MAX), .TS_W(TS_W), .N_BURST(N_BURST),
+        .RF_INIT_PATTERN(RF_INIT_PATTERN)
     ) u_plat_rm (
         .clk(clk),
         .rst_n(rst_n),

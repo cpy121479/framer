@@ -49,6 +49,8 @@ TESTNAME=poe_base_test ./run_uvm.sh     # UVM：2 个 KO，(tid,ts) 配对比对
   `poe_mux` 按 MUX 指令从 RF 取 0~2B/条、按 MXS 移位后拼出 **64B 操作数窗口**（`WIN_W=512`）给 EU；
   `poe_dmux` 在 EU 结果拍用**同一行指令**做逆操作，按掩码把"被搬过的位"回填 RF（其余位保持原值），
   一个 task 回填一次。示例 EU 模型是 128B 口，壳里把窗口放到高半区；接真实 64B EU 时把这段映射删掉即可。
+  **建线程默认填非零 RF 测试图样**（`RF_INIT_PATTERN=1`：`byte[idx]=((idx*37)^tid^0x5A)`，0→0x5A），
+  便于微指令不写 RF 时也能观察取数/移位/回填；设 `RF_INIT_PATTERN=0` 恢复清零。
 - **CCR（32B 表）**：每线程另有一块 **32B CCR 表**（独立于 CSR，建线程清零）。MUX 按 **MXCC**
   从中选 2 字节给 EU（`MXCC[0]` → 高字节、`MXCC[1]` → 低字节）；DMUX 把 EU 写回的 2B 填回
   这两个字节，并**同拍镜像进 CSR 0x2**（验证侧仍按 "CSR 0x2 = CCR" 比对）。

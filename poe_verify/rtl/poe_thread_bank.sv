@@ -15,6 +15,9 @@
 // RF = 每线程 **256B（2048bit = 64 槽 × 32bit，槽 0 在最高位）**。
 //   本模块只做存储：给 MUX 一个"整份 RF 读口"、给 DMUX 一个"整份 RF 回填口"，
 //   取数/回填的字节位置由 MUX/DMUX 按 MUX 指令决定，bank 不解释 RF 的语义。
+//   建线程时默认填**非零测试图样**（RF_INIT_PATTERN=1）：
+//        byte[idx] = ((idx*37) & 0xFF) ^ tid ^ 0x5A，若为 0 则用 0x5A；
+//   这样微指令不写 RF 时，MUX 第一条 task 也能看到非零数据；设为 0 可恢复清零。
 //
 // CCR = 每线程 **32B（256bit）** 条件寄存器表（**独立于 CSR**）：
 //   · MUX 按 MXCC 指令从这 32B 里选 2B 给 EU（[0]→高字节、[1]→低字节）；
@@ -33,7 +36,8 @@ module poe_thread_bank #(
     parameter int TID_W = 3,      // 线程号位宽
     parameter int RF_W    = 2048, // 每线程 RF 位宽（256B = 64 槽 × 32bit）
     parameter int CSRB  = poe_pkg::CSRB,   // 每线程 CSR 字节数（0x00..0x59）
-    parameter int CCRB  = poe_pkg::CCR_B   // 每线程 CCR 表字节数（32B）
+    parameter int CCRB  = poe_pkg::CCR_B,  // 每线程 CCR 表字节数（32B）
+    parameter bit RF_INIT_PATTERN = 1'b1   // 建线程 RF 初值：1=非零测试图样，0=清零
 ) (
     input  logic             clk,             // 时钟
     input  logic             rst_n,           // 低有效异步复位
@@ -90,6 +94,16 @@ module poe_thread_bank #(
             3'd5:    nbytes = 16;   // 128bit（CW_MUX）
             default: nbytes = 44;   // 352bit
         endcase
+    endfunction
+
+    // ---- 建线程时的 RF 非零测试图样（每线程/每字节都不同，且保证不为 0）----
+    //   v = (idx*37) ^ tid ^ 0x5A；若碰巧为 0 就用 0x5A。
+    //   用途：微指令不写 RF 时，MUX 第一次 task 也能读到非零数据，便于看取值/移位/回填。
+    function automatic logic [7:0] rf_init_byte(input logic [TID_W-1:0] tid,
+                                               input int unsigned       idx);
+        automatic logic [7:0] v;
+        v = 8'(idx * 8'd37) ^ 8'({ {(8-TID_W){1'b0}}, tid }) ^ 8'h5A;
+        rf_init_byte = (v == 8'd0) ? 8'h5A : v;
     endfunction
 
     localparam int CWB = int'(A_CW_CMD);   // CW 窗起始字节（0x2e）：之前的字段用字节数组
@@ -151,7 +165,13 @@ module poe_thread_bank #(
                 // 0x16 MUX_PTR 建线程默认值（8×8bit 指针表，非全 0）
                 for (int i = 0; i < 8; i++)
                     csr[alloc_tid][int'(A_MUX_PTR) + i] <= MUX_PTR_DEF[i*8 +: 8];
-                rf[alloc_tid] <= '0;
+                // RF 初值：默认填非零测试图样（每字节不同、永不为 0）；
+                //   需要"真实空 RF"时把 RF_INIT_PATTERN 设 0 即可回到全清。
+                if (RF_INIT_PATTERN)
+                    for (int b = 0; b < RF_W/8; b++)
+                        rf[alloc_tid][b*8 +: 8] <= rf_init_byte(alloc_tid, b);
+                else
+                    rf[alloc_tid] <= '0;
                 ccr[alloc_tid] <= '0;                                   // CCR 表（32B）清零
             end
             // DMUX 回填整份 RF：一个 task 一次（DMUX 已经把没被指令碰过的字节并好）

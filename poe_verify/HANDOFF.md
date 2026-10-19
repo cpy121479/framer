@@ -91,6 +91,7 @@
 | `WIN_W` | 512（64B 送 EU 的窗口） | `poe_platform` 默认 |
 | `TS_MAX` / `TS_W` | 16 / 4 | 同上 |
 | `N_BURST` | 8 | 同上 |
+| `RF_INIT_PATTERN` | 1（建线程 RF 填非零测试图样；0=清零） | `poe_platform` / `poe_thread_bank` 默认 |
 
 注意：`tb/poe_if.sv` 里的 `N_THR/TID_W/RF_W/TS_W` 是 localparam（Verilator 对接口参数化的类型敏感），
 **必须与 `uvm_tb_top` 的 localparam 保持一致**（文件里已注释）。
