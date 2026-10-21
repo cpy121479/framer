@@ -282,6 +282,8 @@ package poe_pkg;
     localparam int KO_PRI_LSB  = 341;   // [343:341] 优先级，0 最高（线程优先级）
     localparam int KO_PRI_W    = 3;     // PRI 位宽
     localparam int KO_HEAD_LSB = 288;   // [319:288] POE_HEAD = 线程首条 burst 的加载地址
+    localparam int KO_W        = 384;   // KO 报文位宽（48B）
+    localparam int KO_RF_BASE  = 128;   // 建线程时把 KO 从 RF 第 128 字节开始放（48B → RF[128..175]）
 
     // ---- 打包一条 29bit burst（供 burst 指令存储内部初始化程序镜像用）----
     // i/v task（bt=0）：低 8bit = sub_pc

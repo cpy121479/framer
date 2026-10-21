@@ -68,31 +68,26 @@ class poe_base_test extends uvm_test;
         @(posedge vif.clk);
     endtask
 
-    // ---- MUX 画像（与微指令画像配套）----
-    //   一行 = 五组字段（布局见 poe_pkg 的 ⑤ 节）：
-    //     ① 取数组：第 k 条 → 窗口第 k 个 2B 槽（slot 0 最高）← RF 字节 (2k, 2k+1)（i=1、mvld=2）
-    //     ② 移位组：**真实移位**，每槽都用设计给的例子
-    //          bits0=5 lr0=0 shift0=1 + bits1=7 lr1=1 shift1=1
-    //          期望：lane[15:11]=raw[14:10]、lane[10:8]=0、lane[7:1]=raw[7:1]、lane[0]=0
-    //          （raw=0xABCD 时 lane=0x50CC；DMUX 逆变换的掩码 = 0x7CFE）
+    // ---- MUX 画像：KO 回流路径（与微指令画像配套）----
+    //   bank 建线程时把 48B 入口 KO 放到 RF[128..175]（高字节在前）。
+    //     ① 取数组：前 16 条（KO 高 32B / 2B）← RF[128+2k, 129+2k]（i=1、mvld=2）；
+    //        其余 16 槽 mvld=0；② 移位组全 0 = 直通（KO 原样进窗口）
     //     ③ MXCC：CCR[0]→高字节、CCR[1]→低字节
-    //     ④/⑤ O 路：O 窗第 m 个 2B ← 64B 窗字节 (2m, 2m+1)，用同一套 MXS（真实移位）
-    //   整窗 32 组（取数+移位）全部填满，方便逐槽打印 raw → lane → 回填掩码。
+    //     ④/⑤ O 路：O 窗第 m 个 2B ← 64B 窗字节 (2m, 2m+1)（EU 处理后的 KO 高 32B），直通
     function bit [MUX_ROW_W-1:0] mux_row_img();
         bit [MUX_ROW_W-1:0] r;
-        bit [MXS_W-1:0]     mxs_shift;
         r = '0;
-        // 设计给的移位例子
-        mxs_shift = mux_mxs_pack(4'd5, 1'b0, 3'd1, 3'd7, 1'b1, 3'd1);
-        for (int k = 0; k < MUX_INS_N; k++) begin
-            r[MF_FET_LSB + MUX_INS_W*k +: MUX_INS_W] = mux_fetch_pack(1'b1, 2'd2, 8'(2*k));
-            r[MF_MXS_LSB + MXS_W*k +: MXS_W]         = mxs_shift;      // 真实移位
+        // ① 取数：KO 高 32B = RF[128..159] → 窗口 slot 0..15
+        for (int k = 0; k < O_INS_N; k++) begin
+            r[MF_FET_LSB + MUX_INS_W*k +: MUX_INS_W] = mux_fetch_pack(1'b1, 2'd2, 8'(KO_RF_BASE + 2*k));
+            r[MF_MXS_LSB + MXS_W*k +: MXS_W]         = '0;             // 直通
         end
         r[MF_MXCC_LSB +: MXCC_W]          = 5'd0;                      // 高字节 ← CCR 表第 0 字节
         r[MF_MXCC_LSB + MXCC_W +: MXCC_W] = 5'd1;                      // 低字节 ← CCR 表第 1 字节
+        // ④/⑤ O 路：窗口 slot 0..15（EU 处理后的 KO 高 32B）→ O 窗
         for (int m = 0; m < O_INS_N; m++) begin
             r[MF_OFET_LSB + MUX_INS_W*m +: MUX_INS_W] = mux_fetch_pack(1'b1, 2'd2, 8'(2*m));
-            r[MF_OMXS_LSB + MXS_W*m +: MXS_W]         = mxs_shift;     // 真实移位
+            r[MF_OMXS_LSB + MXS_W*m +: MXS_W]         = '0;            // 直通
         end
         return r;
     endfunction

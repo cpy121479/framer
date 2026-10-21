@@ -44,6 +44,7 @@ module poe_thread_bank #(
     input  logic             alloc,           // 申请线程脉冲（最高优先级）
     input  logic [TID_W-1:0] alloc_tid,       // 清哪个线程
     input  logic [15:0]      alloc_base_ts,   // 建线程同拍写 CSR 0xc PC_INTER（程序基址）
+    input  logic [KO_W-1:0]  alloc_ko,        // 建线程同拍的入口 KO（写入该线程 RF[128..175]）
     input  logic             dmux_rf_we,      // DMUX 回填 RF（一拍，一个 task 一次）
     input  logic [TID_W-1:0] dmux_rf_tid,     // 回填哪个线程
     input  logic [RF_W-1:0]  dmux_rf_wdata,   // 回填后的整份 RF
@@ -172,6 +173,12 @@ module poe_thread_bank #(
                         rf[alloc_tid][b*8 +: 8] <= rf_init_byte(alloc_tid, b);
                 else
                     rf[alloc_tid] <= '0;
+                // 把入口 KO 48B 从 RF[128] 开始、按"高字节在前"依次放入：
+                //   RF[128] ← KO[383:376]，RF[129] ← KO[375:368]，…，RF[175] ← KO[7:0]
+                //   （放在 RF 初值之后再写，同一拍后者生效，覆盖图样里的这 48 字节）
+                for (int i = 0; i < KO_W/8; i++)
+                    rf[alloc_tid][(KO_RF_BASE + i)*8 +: 8]
+                        <= alloc_ko[(KO_W - 8*(i+1)) +: 8];
                 ccr[alloc_tid] <= '0;                                   // CCR 表（32B）清零
             end
             // DMUX 回填整份 RF：一个 task 一次（DMUX 已经把没被指令碰过的字节并好）

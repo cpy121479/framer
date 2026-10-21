@@ -51,6 +51,9 @@ TESTNAME=poe_base_test ./run_uvm.sh     # UVM：2 个 KO，(tid,ts) 配对比对
   一个 task 回填一次。示例 EU 模型是 128B 口，壳里把窗口放到高半区；接真实 64B EU 时把这段映射删掉即可。
   **建线程默认填非零 RF 测试图样**（`RF_INIT_PATTERN=1`：`byte[idx]=((idx*37)^tid^0x5A)`，0→0x5A），
   便于微指令不写 RF 时也能观察取数/移位/回填；设 `RF_INIT_PATTERN=0` 恢复清零。
+  **建线程同拍把入口 KO 48B 写入 RF[128..175]**（高字节在前）；当前 MUX 画像取 KO 高 32B
+  （RF[128..159]）到 64B 窗 slot 0..15（MXS 直通），O 路再把 EU 处理后的这 32B 收进 O 窗，
+  出口 KO = `{O 窗 32B, 入口 KO 低 16B}`。
 - **CCR（32B 表）**：每线程另有一块 **32B CCR 表**（独立于 CSR，建线程清零）。MUX 按 **MXCC**
   从中选 2 字节给 EU（`MXCC[0]` → 高字节、`MXCC[1]` → 低字节）；DMUX 把 EU 写回的 2B 填回
   这两个字节，并**同拍镜像进 CSR 0x2**（验证侧仍按 "CSR 0x2 = CCR" 比对）。

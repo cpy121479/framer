@@ -210,6 +210,7 @@ module poe_platform #(
         .alloc(alloc),
         .alloc_tid(alloc_tid),
         .alloc_base_ts(alloc_base_ts),
+        .alloc_ko(ko_data),             // 建线程同拍把入口 KO 写入 RF[128..175]
         .dmux_rf_we(dmux_rf_we),        // DMUX 回填整份 RF（一个 task 一次）
         .dmux_rf_tid(dmux_rf_tid),
         .dmux_rf_wdata(dmux_rf_wdata),
