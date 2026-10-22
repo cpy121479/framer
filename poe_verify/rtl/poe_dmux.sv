@@ -82,12 +82,17 @@ module poe_dmux #(
             mv  = mux_mvld(ins);
             of  = mux_off(ins, csr_snap);
             if ((mv != 2'd0) && !((mv == 2'd2) && (int'(of) > 254))) begin
-                orig = {rf_rd[8*int'(of) + 8 +: 8], rf_rd[8*int'(of) +: 8]};
+                orig = {rf_rd[8*int'(of) +: 8], rf_rd[8*int'(of) + 8 +: 8]};
                 mxs_unshift(win_out[WIN_W-16*(k+1) +: 16], mxs, val, msk);
                 if (mv == 2'd1) msk &= 16'hFF00;              // mvld=1：只有高字节是搬过的
                 newv = (orig & ~msk) | (val & msk);
-                if (mv == 2'd2) rf_wdata[8*int'(of) +: 16]    = newv;
-                else            rf_wdata[8*int'(of) + 8 +: 8] = newv[15:8];
+                // 回填：RF[of] = 16bit 的高字节（先取的字节），RF[of+1] = 低字节
+                if (mv == 2'd2) begin
+                    rf_wdata[8*int'(of) +: 8]     = newv[15:8];
+                    rf_wdata[8*int'(of) + 8 +: 8] = newv[7:0];
+                end else begin
+                    rf_wdata[8*int'(of) +: 8]     = newv[15:8];     // mvld=1：只回填高字节
+                end
             end
         end
     end
@@ -108,7 +113,7 @@ module poe_dmux #(
             if (mv != 2'd0) begin
                 raw = 16'd0;
                 if ((mv == 2'd2) && (int'(of[5:0]) <= 62))
-                    raw = {win_out[8*int'(of[5:0]) + 8 +: 8], win_out[8*int'(of[5:0]) +: 8]};
+                    raw = {win_out[8*int'(of[5:0]) +: 8], win_out[8*int'(of[5:0]) + 8 +: 8]};
                 else if (mv == 2'd1)
                     raw = {win_out[8*int'(of[5:0]) +: 8], 8'd0};
                 mxs_unshift(raw, mxs, val, msk);

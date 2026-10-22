@@ -92,7 +92,7 @@ module poe_mux #(
         of  = mux_off(ins, snap);
         raw = 16'd0;
         if ((mv == 2'd2) && (int'(of) <= 254))
-            raw = {rfr[8*int'(of) + 8 +: 8], rfr[8*int'(of) +: 8]};   // 先取的字节在高 8bit
+            raw = {rfr[8*int'(of) +: 8], rfr[8*int'(of) + 8 +: 8]};   // 先取的字节在高 8bit
         else if (mv == 2'd1)
             raw = {rfr[8*int'(of) +: 8], 8'd0};                       // 取 1B 放高 8bit
         lane_of = (mv == 2'd0) ? 16'd0 : mxs_align(raw, mxs);
