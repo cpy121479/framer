@@ -26,7 +26,7 @@ module tb_top;
     // ---- MUX 指令预载 ----
     logic             mux_imem_we = 1'b0;
     logic [3:0]       mux_imem_waddr = '0;
-    logic [MUX_ROW_W-1:0] mux_imem_wdata = '0;   // 一行 = 五组字段（1280bit，见 poe_pkg ⑤）
+    logic [MUX_ROW_W-1:0] mux_imem_wdata = '0;   // 一行 = 五组字段（768bit，见 poe_pkg ⑤）
     // ---- 出口 / 观测 ----
     logic         out_vld;
     logic [383:0] out_data;
@@ -132,29 +132,36 @@ module tb_top;
         imem_we = 1'b0;
     endtask
 
-    // ---- MUX 画像：KO 回流路径（与微指令画像配套）----
-    //   bank 建线程时把 48B 入口 KO 放到 RF[128..175]（高字节在前，见 poe_thread_bank）。
+    // ---- MUX 画像：KO 回流路径（按开发文档功能）----
+    //   bank 把入口 KO 48B 放在 RF[128..175]，区域内降序（KO byte0 在 RF[175]）。
     //   一行 = 五组字段（布局见 poe_pkg 的 ⑤ 节）：
-    //     ① 取数组：前 16 条（= KO 高 32B / 2B）← RF[128+2k, 129+2k]（i=1、mvld=2），
-    //        第 k 条仍是窗口第 k 个 2B 槽（slot 0 最高）；其余 16 个槽 mvld=0（窗口低位为 0）
-    //     ② 移位组：全 0 = 直通（KO 字节原样搬进窗口，不额外移位）
-    //     ③ MXCC：CCR 表第 0 字节 → 高字节、第 1 字节 → 低字节（EU 的 2B CSR）
-    //     ④/⑤ O 路：O 窗第 m 个 2B ← 64B 窗字节 (2m, 2m+1)（EU 处理后的 KO 高 32B），直通
+    //     ① 取数：前 16 条取 KO 高 32B，高位序偏移 KO_FET_OFF+2k；其余 16 条 mvld=0。
+    //     ② 主 lane：8 条直通（bits0=15,lr0=0,shift0=0 → valid=16 / mask=0xFFFF）。
+    //     ③ CCR：8 条索引 0..7（CCR 向量初值 0）。
+    //     ④ O 取数：slot k 为源，按偏移 2k deposit 到 32B O 窗（高位序）。
+    //     ⑤ O lane：4 条直通。
     function automatic logic [MUX_ROW_W-1:0] mux_row_img();
         logic [MUX_ROW_W-1:0] r;
+        logic [LANE_W-1:0]    lane_passthru;
         r = '0;
-        // ① 取数：KO 高 32B = RF[128..159] → 窗口 slot 0..15
-        for (int k = 0; k < O_INS_N; k++) begin
-            r[MF_FET_LSB + MUX_INS_W*k +: MUX_INS_W] = mux_fetch_pack(1'b1, 2'd2, 8'(KO_RF_BASE + 2*k));
-            r[MF_MXS_LSB + MXS_W*k +: MXS_W]         = '0;             // 直通
-        end
-        r[MF_MXCC_LSB +: MXCC_W]          = 5'd0;                      // 高字节 ← CCR 表第 0 字节
-        r[MF_MXCC_LSB + MXCC_W +: MXCC_W] = 5'd1;                      // 低字节 ← CCR 表第 1 字节
-        // ④/⑤ O 路：窗口 slot 0..15（EU 处理后的 KO 高 32B）→ O 窗
-        for (int m = 0; m < O_INS_N; m++) begin
-            r[MF_OFET_LSB + MUX_INS_W*m +: MUX_INS_W] = mux_fetch_pack(1'b1, 2'd2, 8'(2*m));
-            r[MF_OMXS_LSB + MXS_W*m +: MXS_W]         = '0;            // 直通
-        end
+        lane_passthru = lane_pack(4'hF, 1'b0, 3'd0, 3'd0, 1'b0, 3'd0);
+        // ① 取数：KO 高 32B → 窗口 slot 0..15
+        for (int k = 0; k < O_INS_N; k++)
+            r[MF_FET_LSB + MUX_INS_W*k +: MUX_INS_W] =
+                mux_fetch_pack(1'b1, 2'd2, 8'(KO_FET_OFF + 2*k));
+        // ② 主链 8 条 lane 直通
+        for (int k = 0; k < LANE_N; k++)
+            r[MF_LANE_LSB + LANE_W*k +: LANE_W] = lane_passthru;
+        // ③ CCR 8 条索引
+        for (int k = 0; k < CCR_INS_N; k++)
+            r[MF_CCR_LSB + CCR_INS_W*k +: CCR_INS_W] = k[4:0];
+        // ④ O 取数：slot k → O 偏移 2k
+        for (int k = 0; k < O_INS_N; k++)
+            r[MF_OFET_LSB + MUX_INS_W*k +: MUX_INS_W] =
+                mux_fetch_pack(1'b1, 2'd2, 8'(2*k));
+        // ⑤ O 链 4 条 lane 直通
+        for (int k = 0; k < O_LANE_N; k++)
+            r[MF_OLANE_LSB + LANE_W*k +: LANE_W] = lane_passthru;
         return r;
     endfunction
 
@@ -197,25 +204,40 @@ module tb_top;
         ccr_entry = csr_obs[tid][8*int'(A_CCR) +: 16];
     endfunction
 
-    // ---- MXS 语义自检（MUX 取值 ↔ DMUX 回填的往返一致性）----
-    //   ① 先核对设计给的例子：源 0xABCD、bits0=5 lr0=0 shift0=1 + bits1=7 lr1=1 shift1=1 → 0x50CC
-    //   ② 再穷举 bits0/lr0/shift0/bits1/lr1/shift1 的全部组合，验证"取出来的字段能原位放回去"：
-    //        mxs_unshift( mxs_align(src, mxs) ) 命中掩码的位 == src 的同名位
-    //      （DMUX 的掩码回填就是靠这条性质：只回填被指令搬过的位，其余位保持 RF 原值）
-    task automatic mxs_selftest(output bit ok);
+    // ---- lane 语义自检（文档 lane_shifter R4：正向 ↔ DMUX 反向）----
+    //   ① 直通编码 bits0=15/lr0=0/shift0=0：0xABCD → 0xABCD；
+    //   ② 二操作数定向：b0=3/lr0=1/s0=0（源 bit0..3 → out0@bit0），
+    //      b1=3/lr1=0/s1=4（源 bit4..7 → out1@bit8）：0xABCD → 0x0C0D；
+    //   ③ 穷举 b0/lr0/s0/b1/lr1/s1 组合，验证反向恢复的掩码位与原值一致。
+    task automatic lane_selftest(output bit ok);
         logic [15:0] src [2];
         logic [15:0] lane, val, msk;
-        logic [14:0] mxs;
+        logic [14:0] ins;
         int          n_case;
         ok = 1'b1;
         n_case = 0;
         src[0] = 16'hABCD;
         src[1] = 16'h1357;
-        lane = mxs_align(16'hABCD, mux_mxs_pack(4'd5, 1'b0, 3'd1, 3'd7, 1'b1, 3'd1));
-        if (lane !== 16'h50CC) begin
+        // ① 直通
+        ins = lane_pack(4'hF, 1'b0, 3'd0, 3'd0, 1'b0, 3'd0);
+        lane = lane_fwd(16'hABCD, ins);
+        if (lane !== 16'hABCD) begin
             ok = 1'b0;
-            $display("MXS_SELFTEST 例子不符：lane=%h（期望 50CC）", lane);
+            $display("LANE_SELFTEST 直通不符：%h（期望 ABCD）", lane);
         end
+        // ② 二操作数定向
+        ins = lane_pack(4'd3, 1'b1, 3'd0, 3'd3, 1'b0, 3'd4);
+        lane = lane_fwd(16'hABCD, ins);
+        if (lane !== 16'h0C0D) begin
+            ok = 1'b0;
+            $display("LANE_SELFTEST 二操作数例子不符：%h（期望 0C0D）", lane);
+        end
+        lane_rev(lane, ins, val, msk);
+        if ((val & msk) !== (16'hABCD & msk)) begin
+            ok = 1'b0;
+            $display("LANE_SELFTEST 二操作数逆变换不符：val=%h msk=%h", val, msk);
+        end
+        // ③ 组合穷举往返
         for (int i = 0; i < 2; i++)
             for (int b0 = 0; b0 < 16; b0++)
                 for (int lr0 = 0; lr0 < 2; lr0++)
@@ -223,19 +245,20 @@ module tb_top;
                         for (int b1 = 0; b1 < 8; b1++)
                             for (int lr1 = 0; lr1 < 2; lr1++)
                                 for (int s1 = 0; s1 < 8; s1++) begin
-                                    mxs = mux_mxs_pack(b0[3:0], lr0[0], s0[2:0], b1[2:0], lr1[0], s1[2:0]);
-                                    lane = mxs_align(src[i], mxs);
-                                    mxs_unshift(lane, mxs, val, msk);
+                                    ins = lane_pack(b0[3:0], lr0[0], s0[2:0], b1[2:0], lr1[0], s1[2:0]);
+                                    lane = lane_fwd(src[i], ins);
+                                    lane_rev(lane, ins, val, msk);
                                     n_case++;
                                     if ((val & msk) !== (src[i] & msk)) begin
                                         ok = 1'b0;
                                         if (n_case < 8)
-                                            $display("MXS_SELFTEST 往返不符：src=%h mxs=%h val&msk=%h src&msk=%h",
-                                                     src[i], mxs, val & msk, src[i] & msk);
+                                            $display("LANE_SELFTEST 往返不符：src=%h ins=%h val&msk=%h src&msk=%h",
+                                                     src[i], ins, val & msk, src[i] & msk);
                                     end
                                 end
-        $display("MXS_SELFTEST %0d 组往返 %s（例子 0xABCD→%h）", n_case, ok ? "OK" : "FAIL",
-                 mxs_align(16'hABCD, mux_mxs_pack(4'd5, 1'b0, 3'd1, 3'd7, 1'b1, 3'd1)));
+        $display("LANE_SELFTEST %0d 组往返 %s（直通 0xABCD→%h，二操作数→%h）", n_case, ok ? "OK" : "FAIL",
+                 lane_fwd(16'hABCD, lane_pack(4'hF, 1'b0, 3'd0, 3'd0, 1'b0, 3'd0)),
+                 lane_fwd(16'hABCD, lane_pack(4'd3, 1'b1, 3'd0, 3'd3, 1'b0, 3'd4)));
     endtask
 
     // ---- 发一个 KO（程序基址固定 ts 行 0；同拍带 csr 预发射口）----
@@ -260,13 +283,13 @@ module tb_top;
     // ---- 主流程 ----
     initial begin
         bit pre_ok;
-        bit mxs_ok;
+        bit lane_ok;
         rst_n = 1'b0;
         repeat (4) @(posedge clk);
         rst_n = 1'b1;
         @(posedge clk);
 
-        mxs_selftest(mxs_ok);          // MXS 取值/回填语义自检（不依赖平台时序）
+        lane_selftest(lane_ok);        // lane 正/反向语义自检（不依赖平台时序）
         preload_imem();
         preload_mux_imem();
 
@@ -296,10 +319,10 @@ module tb_top;
                  (cw_entry(1,1) === 44'd0) &&      // strb=0 的项保持清零
                  (cw_entry(1,2) === PRE_DATA1[2*44 +: 44]) &&
                  (cw_entry(1,3) === 44'd0);
-        if (err_cnt == 0 && chk_cnt >= 4 && ko_cnt == 2 && done_cnt == 2 && pre_ok && mxs_ok)
+        if (err_cnt == 0 && chk_cnt >= 4 && ko_cnt == 2 && done_cnt == 2 && pre_ok && lane_ok)
             $display("SMOKE PASS");
-        else $display("SMOKE FAIL (chk=%0d err=%0d ko=%0d done=%0d pre_ok=%0b mxs_ok=%0b)",
-                      chk_cnt, err_cnt, ko_cnt, done_cnt, pre_ok, mxs_ok);
+        else $display("SMOKE FAIL (chk=%0d err=%0d ko=%0d done=%0d pre_ok=%0b lane_ok=%0b)",
+                      chk_cnt, err_cnt, ko_cnt, done_cnt, pre_ok, lane_ok);
         $finish;
     end
 

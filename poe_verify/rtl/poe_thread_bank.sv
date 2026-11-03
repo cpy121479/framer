@@ -19,10 +19,10 @@
 //        byte[idx] = ((idx*37) & 0xFF) ^ tid ^ 0x5A，若为 0 则用 0x5A；
 //   这样微指令不写 RF 时，MUX 第一条 task 也能看到非零数据；设为 0 可恢复清零。
 //
-// CCR = 每线程 **32B（256bit）** 条件寄存器表（**独立于 CSR**）：
-//   · MUX 按 MXCC 指令从这 32B 里选 2B 给 EU（[0]→高字节、[1]→低字节）；
-//   · DMUX 在每个 task 结束时把 EU 写回的 2B 填回 MXCC 选中的两个字节；
-//   · 同拍把这 2B **镜像**进 CSR 0x2（16bit，小端），验证侧仍按"CSR 0x2 = CCR"比对；
+// CCR = 每线程 **64bit（32×2bit 条件码）** 向量（**独立于 CSR**，按开发文档 ccr_conv/ccr_div）：
+//   · MUX 用 8 条 5bit 指令从 32 个 2bit 码里各选 1 个，输出 16bit 给 EU；
+//   · DMUX 用同样 8 条指令把 EU 写回的 16bit deposit 回 64bit；
+//   · 同拍把 EU 写回的 16bit **镜像**进 CSR 0x2（16bit，小端），验证侧仍按"CSR 0x2 = CCR"比对；
 //   · 建线程时清零。
 // EU 侧对接（保持不变）：RMW 的 mstatus slot0 ← CSR 0x2 CCR；ro_regs 的 mcycle ← CSR 0x4 SYS_TS；
 //   EU 的 WO 回刷本版只计数（真表里暂无对应只写寄存器）。
@@ -36,7 +36,7 @@ module poe_thread_bank #(
     parameter int TID_W = 3,      // 线程号位宽
     parameter int RF_W    = 2048, // 每线程 RF 位宽（256B = 64 槽 × 32bit）
     parameter int CSRB  = poe_pkg::CSRB,   // 每线程 CSR 字节数（0x00..0x59）
-    parameter int CCRB  = poe_pkg::CCR_B,  // 每线程 CCR 表字节数（32B）
+    parameter int CCRW  = poe_pkg::CCR_W,  // 每线程 CCR 向量位宽（64bit = 32×2bit）
     parameter bit RF_INIT_PATTERN = 1'b1   // 建线程 RF 初值：1=非零测试图样，0=清零
 ) (
     input  logic             clk,             // 时钟
@@ -44,19 +44,18 @@ module poe_thread_bank #(
     input  logic             alloc,           // 申请线程脉冲（最高优先级）
     input  logic [TID_W-1:0] alloc_tid,       // 清哪个线程
     input  logic [15:0]      alloc_base_ts,   // 建线程同拍写 CSR 0xc PC_INTER（程序基址）
-    input  logic [KO_W-1:0]  alloc_ko,        // 建线程同拍的入口 KO（写入该线程 RF[128..175]）
+    input  logic [KO_W-1:0]  alloc_ko,        // 建线程同拍的入口 KO（降序写入该线程 RF[128..175]）
     input  logic             dmux_rf_we,      // DMUX 回填 RF（一拍，一个 task 一次）
     input  logic [TID_W-1:0] dmux_rf_tid,     // 回填哪个线程
     input  logic [RF_W-1:0]  dmux_rf_wdata,   // 回填后的整份 RF
-    // ---- CCR 表（32B）读口：MUX 按 MXCC 从这里选 2B ----
-    input  logic [TID_W-1:0] ccr_rtid,        // 读哪个线程的 CCR 表
-    output logic [CCRB*8-1:0] ccr_rd,         // 该线程整份 32B CCR 表（组合读）
+    // ---- CCR 向量（64bit = 32×2bit）读口：MUX 用 8 条 5bit 指令各选 1 个码 ----
+    input  logic [TID_W-1:0] ccr_rtid,        // 读哪个线程的 CCR 向量
+    output logic [CCRW-1:0]  ccr_rd,          // 该线程 64bit CCR（32×2bit，组合读）
     // ---- CCR 表写口：DMUX 在每个 task 结束时回填 2B（两个字节落点）+ 镜像 CSR 0x2 ----
     input  logic             ccr_we,          // 回填写使能（一拍）
     input  logic [TID_W-1:0] ccr_wtid,        // 回填哪个线程
-    input  logic [4:0]       ccr_a0,          // 高字节落在 CCR 表哪个字节（MXCC[0]）
-    input  logic [4:0]       ccr_a1,          // 低字节落在哪个字节（MXCC[1]）
-    input  logic [15:0]      ccr_wdata,       // 要写回的 2B
+    input  logic [CCRW-1:0]  ccr_wdata,       // 放回后的 64bit CCR（deposit 结果）
+    input  logic [15:0]      ccr_mirror,      // EU 写回的 16bit（8×2bit），镜像 CSR 0x2
     // ---- EU 侧 POE CSR 写口（通用：地址 + 位宽 + 数据；CCR 只是地址 0x2 的一个表项）----
     input  logic             eu_csr_we,       // EU 发起的 CSR 写使能
     input  logic [TID_W-1:0] eu_csr_wtid,     // 写哪个线程
@@ -113,11 +112,11 @@ module poe_thread_bank #(
     logic [7:0]      csr [N_THR][CSRB];
     logic [CW_N*CW_W-1:0] cw [N_THR];               // 0x2e..0x59：CW 窗（8×44bit）
     logic [RF_W-1:0] rf  [N_THR];
-    logic [CCRB*8-1:0] ccr [N_THR];                 // 每线程 32B CCR 表（独立于 CSR）
+    logic [CCRW-1:0] ccr [N_THR];                   // 每线程 64bit CCR（32×2bit，独立于 CSR）
 
     // ---- MUX 读口：整份 RF 给 MUX，按字节切数由 MUX 自己做 ----
     assign rf_rd = rf[rf_rd_tid];
-    // ---- MUX 读口：整份 CCR 表给 MUX，MXCC 选哪 2B 由 MUX 自己解 ----
+    // ---- MUX 读口：整份 64bit CCR 给 MUX，8×5bit 索引提取在 MUX 内完成 ----
     assign ccr_rd = ccr[ccr_rtid];
     // 注：POE CSR ↔ EU 侧 CSR（RISC-V 束）的映射**不在这里**，
     //     已经挪到 EU 壳（poe_eu_dut/poe_eu_rm），bank 只做通用存储。
@@ -173,26 +172,26 @@ module poe_thread_bank #(
                         rf[alloc_tid][b*8 +: 8] <= rf_init_byte(alloc_tid, b);
                 else
                     rf[alloc_tid] <= '0;
-                // 把入口 KO 48B 从 RF[128] 开始、按"高字节在前"依次放入：
-                //   RF[128] ← KO[383:376]，RF[129] ← KO[375:368]，…，RF[175] ← KO[7:0]
+                // 把入口 KO 48B 放到 RF[128..175]，**区域内降序**（配合文档高位序取数）：
+                //   RF[175] ← KO[383:376]（KO byte0），RF[174] ← KO[375:368]（byte1），…
+                //   RF[128] ← KO[7:0]（byte47）
                 //   （放在 RF 初值之后再写，同一拍后者生效，覆盖图样里的这 48 字节）
                 for (int i = 0; i < KO_W/8; i++)
-                    rf[alloc_tid][(KO_RF_BASE + i)*8 +: 8]
+                    rf[alloc_tid][(KO_RF_BASE + (KO_W/8 - 1 - i))*8 +: 8]
                         <= alloc_ko[(KO_W - 8*(i+1)) +: 8];
-                ccr[alloc_tid] <= '0;                                   // CCR 表（32B）清零
+                ccr[alloc_tid] <= '0;                                   // CCR 向量（64bit）清零
             end
             // DMUX 回填整份 RF：一个 task 一次（DMUX 已经把没被指令碰过的字节并好）
             //   只有"同一拍又在 alloc 同一个 tid"才让位（正常不会发生）
             if (dmux_rf_we && !(alloc && (alloc_tid == dmux_rf_tid))) begin
                 rf[dmux_rf_tid] <= dmux_rf_wdata;
             end
-            // CCR 回填（DMUX）：一个 task 一次，把 EU 写回的 2B 填到 MXCC 选中的两个字节，
-            //   同拍镜像进 CSR 0x2（16bit 小端：0x2 = 低字节、0x3 = 高字节）供验证侧比对。
+            // CCR 回填（DMUX）：一个 task 一次，把 64bit deposit 结果写回；
+            //   同拍把 EU 写回的 16bit（8×2bit）镜像进 CSR 0x2（小端）供验证侧比对。
             if (ccr_we && !(alloc && (alloc_tid == ccr_wtid))) begin
-                ccr[ccr_wtid][int'(ccr_a0)*8 +: 8] <= ccr_wdata[15:8];
-                ccr[ccr_wtid][int'(ccr_a1)*8 +: 8] <= ccr_wdata[7:0];
-                csr[ccr_wtid][int'(A_CCR)]      <= ccr_wdata[7:0];
-                csr[ccr_wtid][int'(A_CCR) + 1]  <= ccr_wdata[15:8];
+                ccr[ccr_wtid]                   <= ccr_wdata;
+                csr[ccr_wtid][int'(A_CCR)]      <= ccr_mirror[7:0];
+                csr[ccr_wtid][int'(A_CCR) + 1]  <= ccr_mirror[15:8];
             end
             // 平台线程侧写：只有"同一拍又在 alloc 同一个 tid"才让位
             if (csr_we && !(alloc && (alloc_tid == csr_wtid))) begin

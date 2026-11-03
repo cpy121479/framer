@@ -19,10 +19,10 @@
 |---|---|
 | `rtl/poe_pkg.sv` | **唯一位号/地址表**（burst 字段 / ts 行 / CSR 地址 / MUX 指令字段）；必须最先编 |
 | `rtl/poe_burst_imem.sv` | 宏指令存储（只读 ROM，每线程一个组合读口） |
-| `rtl/poe_mux_imem.sv` | MUX 指令存储（16 行 × 1280bit = 五组字段，TB 预载） |
-| `rtl/poe_mux.sv` | MUX 级：按 MUX 指令取数 + MXS 移位组 64B 窗口；MXCC 选 2B CCR 给 EU |
-| `rtl/poe_dmux.sv` | DMUX 级：逆 MXS/逆取数回填 RF（掩码保护）+ 回填 CCR 表 + O 窗累积 + 再生出口 KO |
-| `rtl/poe_thread_bank.sv` | 每线程一份 CSR（90B）+ RF（256B）+ CCR（32B）表 |
+| `rtl/poe_mux_imem.sv` | MUX 指令存储（16 行 × 768bit = 五组字段，TB 预载） |
+| `rtl/poe_mux.sv` | MUX 级：32 fetcher 高位序取数 + 8 lane 移位 → 64B 窗；8×5bit CCR 提取 16bit 给 EU |
+| `rtl/poe_dmux.sv` | DMUX 级：8/4 lane 逆变换 + 32/16 fetcher deposit 回 RF/CCR64/O 窗 + 出口 KO |
+| `rtl/poe_thread_bank.sv` | 每线程一份 CSR（90B）+ RF（256B）+ CCR（64bit = 32×2bit） |
 | `rtl/poe_thr_pool.sv` | 线程池：建线程/取指/发 task/推 CUR_TS/事件；出口 KO 由 DMUX 直出，本模块收"已发出/已取走" |
 | `rtl/poe_platform.sv` | 单边平台：把上面 + EU 装配成一份（DUT/RM 各一份） |
 | `rtl/poe_verify_top.sv` | RTL 自检顶层：两份平台 + 检查器（**只有 tb_top 用**） |
@@ -99,8 +99,8 @@
 ## 5. 三条用例的期望基线（回归参照）
 
 ```
-RTL 自检：MXS_SELFTEST 65536 组往返 OK（例子 0xABCD→50cc）；
-          CHK ts 边界=4  err=0  出口KO=2  线程结束=2；EU err 检查 8 次全 0；tid0/tid1 CCR 5/5   SMOKE PASS
+RTL 自检：LANE_SELFTEST 65536 组往返 OK（直通 0xABCD→ABCD，二操作数→0C0D）；
+          CHK ts 边界=4  err=0  出口KO=2  线程结束=2；EU err 检查 8 次全 0；tid0/tid1 CCR 0/0   SMOKE PASS
 池级冒烟：POOL_SMOKE_PASS  task=24 ts_done=12 thr_done=6 out_ko=6 ct_skip=0
 UVM：    CSR 4 次错 0；RF 4 次错 0；出口 KO 2 次错 0；EU 错误标志 dut=8 rm=8 次错 0；UVM_ERROR 0
 ```
@@ -110,9 +110,9 @@ UVM：    CSR 4 次错 0；RF 4 次错 0；出口 KO 2 次错 0；EU 错误标�
 - **观测接口**：平台输出 `ts_done` **事件快照总线** `obs_vld/obs_tid/obs_ts/obs_rf(2048b)/obs_csr(720b)`
   （约 2.8kbit，一拍有效），不再有 64 线程全表快照；UVM monitor 和 RTL checker 都在 `obs_vld` 拍取。
   线程池功能用的 `th_stat_flat` 仍是一张 `64×8bit` 小表，不属于观测总线。
-- **KO 回流路径**：建线程同拍把入口 KO 48B 从 `RF[128]` 起按高字节在前写入（bank 端口 `alloc_ko`，
-  平台接 `ko_data`）；当前 MUX 画像取 KO 高 32B（`RF[128..159]`）到 64B 窗 slot 0..15（MXS 直通），
-  O 路再把 EU 处理后的这 32B 收进 O 窗；出口 KO = `{O 窗 32B, 入口 KO 低 16B}`（DMUX 不变）。
+- **KO 回流路径**：建线程同拍把入口 KO 48B 写入 RF[128..175]（区域内降序，KO byte0 在 RF[175]；
+  bank 端口 `alloc_ko`，平台接 `ko_data`）；MUX 用高位序偏移 `KO_FET_OFF+2k` 取 KO 高 32B 到
+  64B 窗 slot 0..15，O 链按偏移 2k deposit 到 O 窗；出口 KO = `{O 窗 32B, 入口 KO 低 16B}`。
 - `eu/` 是 sa-studio 生成的 rv32i 参考模型，DUT/RM 两个壳内部都例化同一份 —— 所以今天
   DUT vs RM 比对通过只代表"自洽"，接真实 EU 后才开始真验证。
 - 接真实 EU 时**只改 `rtl/poe_eu_dut.sv`**，替换步骤见 `README.md` 的"接真实 EU 的替换清单"。

@@ -6,13 +6,13 @@ EU 核的功能验证平台，一条直线走通：
 KO 48B + csr 预发射口
    → poe_thr_pool 建线程 / 取指 / 发 task
        ├ poe_burst_imem   宏指令存储（只读 ROM，每线程一个组合读口）
-       ├ poe_mux          MUX 级：按 sub_pc 读 MUX 指令行 → 从 256B RF 取数 +
-       │                  MXS 移位 → 64B 操作数窗口；MXCC 从 32B CCR 表选 2B CSR
-       │   └ poe_mux_imem MUX 指令存储（16 行 × 1280bit，TB/test 预载）
-       ├ poe_dmux         DMUX 级：逆 MXS + 逆取数回填 RF（掩码保护）/ 回填 CCR 表 /
-       │                  累积 32B O 窗；线程结束 → 出口 KO = {O 窗 32B, 入口 KO 低 16B}
-       ├ poe_thread_bank  每线程一份 CSR + RF(256B) + CCR(32B) 表
-       └ 共享一份 EU（poe_eu_dut = 替换点 / poe_eu_rm = 参考模型），64B 窗口 + 2B CCR 进出
+       ├ poe_mux          MUX 级：32 fetcher 取数（高位序）+ 8 lane 移位 → 64B 窗；
+       │                  8×5bit CCR 指令从 64bit CCR 提取 16bit 给 EU
+       │   └ poe_mux_imem MUX 指令存储（16 行 × 768bit，TB/test 预载）
+       ├ poe_dmux         DMUX 级：8/4 lane 逆变换 + 32/16 fetcher 写回 RF/CCR64/O 窗；
+       │                  线程结束 → 出口 KO = {O 窗 32B, 入口 KO 低 16B}
+       ├ poe_thread_bank  每线程一份 CSR + RF(256B) + CCR(64bit = 32×2bit)
+       └ 共享一份 EU（poe_eu_dut = 替换点 / poe_eu_rm = 参考模型），64B 窗口 + 16bit CCR 进出
    → ts_done / thr_done 事件 + 观测事件总线（该线程 RF/CSR 快照）+ 出口 KO（由 DMUX 直出）
 ```
 
@@ -46,17 +46,18 @@ TESTNAME=poe_base_test ./run_uvm.sh     # UVM：2 个 KO，(tid,ts) 配对比对
 - **线程池**：`N_THR=64`、`TID_W=6`；pri 小优先、同 pri 取最老、不抢占；
   出口 KO 被取走（`out_rdy`）后才释放线程槽。
 - **RF 与窗口**：平台侧每线程 **256B（2048bit = 64 槽 × 32bit）**，EU **不直接看 RF**：
-  `poe_mux` 按 MUX 指令从 RF 取 0~2B/条、按 MXS 移位后拼出 **64B 操作数窗口**（`WIN_W=512`）给 EU；
-  `poe_dmux` 在 EU 结果拍用**同一行指令**做逆操作，按掩码把"被搬过的位"回填 RF（其余位保持原值），
-  一个 task 回填一次。示例 EU 模型是 128B 口，壳里把窗口放到高半区；接真实 64B EU 时把这段映射删掉即可。
+  `poe_mux` 按文档 `data_fetcher` 的**高位序**（偏移 0 = 最高两字节）取 0~2B/条，
+  32 条拼成 64B 窗，再对高 8 个 2B 槽做 lane 移位；低 48B 直通。
+  `poe_dmux` 用同一行指令做 lane 逆变换 + 32 路 deposit 回 RF（只写搬过的位，其余保持原值）。
+  示例 EU 模型是 128B 口，壳里把窗口放到高半区；接真实 64B EU 时把这段映射删掉即可。
   **建线程默认填非零 RF 测试图样**（`RF_INIT_PATTERN=1`：`byte[idx]=((idx*37)^tid^0x5A)`，0→0x5A），
   便于微指令不写 RF 时也能观察取数/移位/回填；设 `RF_INIT_PATTERN=0` 恢复清零。
-  **建线程同拍把入口 KO 48B 写入 RF[128..175]**（高字节在前）；当前 MUX 画像取 KO 高 32B
-  （RF[128..159]）到 64B 窗 slot 0..15（MXS 直通），O 路再把 EU 处理后的这 32B 收进 O 窗，
-  出口 KO = `{O 窗 32B, 入口 KO 低 16B}`。
-- **CCR（32B 表）**：每线程另有一块 **32B CCR 表**（独立于 CSR，建线程清零）。MUX 按 **MXCC**
-  从中选 2 字节给 EU（`MXCC[0]` → 高字节、`MXCC[1]` → 低字节）；DMUX 把 EU 写回的 2B 填回
-  这两个字节，并**同拍镜像进 CSR 0x2**（验证侧仍按 "CSR 0x2 = CCR" 比对）。
+  **建线程同拍把入口 KO 48B 写入 RF[128..175]**，区域内**降序**（KO byte0 在 RF[175]）；
+  当前 MUX 画像用高位序偏移 `KO_FET_OFF+2k` 取 KO 高 32B 到窗 slot 0..15，O 链再把这 32B
+  deposit 到 32B O 窗；出口 KO = `{O 窗 32B, 入口 KO 低 16B}`。
+- **CCR（64bit）**：每线程有 **32×2bit=64bit CCR 向量**（独立于 CSR，建线程清零）。
+  MUX 用 **8 条 5bit 指令**各选 1 个 2bit 码，拼成 16bit 给 EU；DMUX 用同样 8 条指令把
+  EU 写回的 16bit deposit 回 64bit，并**同拍把 16bit 镜像进 CSR 0x2** 供比对。
 - **CSR**：按字节寻址 `0x00..0x59`（每线程 90 字节）。`0x2` CCR（EU 读写）、`0x4` CCR_MASK、
   `0x5` SYS_TS、`0x9` TH_ID、`0xa` TH_STAT（3=DONE 结束线程）、`0xf` CUR_TS、`0x12` MUX_C、
   `0x16` MUX_PTR（64bit）、`0x1e` CW_MUX（4×32bit）、`0x2e` CW_CMD（352bit = 8×44bit）。
@@ -71,24 +72,24 @@ TESTNAME=poe_base_test ./run_uvm.sh     # UVM：2 个 KO，(tid,ts) 配对比对
   线程池功能需要的 `TH_STAT` 仍保留一张小表 `64×8bit`（不属于观测总线）。
 - **两级存储**：宏指令存储是只读 ROM（模块内部 initial 拼镜像，无写口）；
   微指令存储（EU 内）与 MUX 指令存储都需要 TB/test 预载。
-- **MUX/DMUX 指令行**（一行 = 一个 `sub_pc` 的完整画像，1280bit，布局唯一定义在 `poe_pkg` ⑤ 节）：
-  ① 取数 32×11bit（第 k 条 ↔ 窗口第 k 个 2B 槽，**slot 0 = 最高 16bit**；`mvld`=0/1/2；
-  先取的字节放槽的高 8bit；`i=0` 时偏移从 CSR `MUX_PTR` 按 `src_ptr` 低 3bit 选，`i=1` 时 `[7:0]` 即偏移）
-  ② MXS 移位 32×15bit（`[14:11]bits0 [10]lr0 [9:7]shift0 [6:4]bits1 [3]lr1 [2:0]shift1`；
-  按 lr 侧跳 shift 位取 bits 位、**左对齐**：field0→槽 bit15 起、field1→槽 bit7 起；`bits0>8` 时 field1 不执行；
-  **全 0 的 MXS = 直通**）
-  ③ MXCC 2×5bit（32B CCR 表索引）④⑤ O 路 16×(11+15)bit（64B 窗 → 32B O 窗，供 KO 再生）。
+- **MUX/DMUX 指令行**（一行 = 一个 `sub_pc` 的完整画像，768bit，布局唯一定义在 `poe_pkg` ⑤ 节）：
+  ① 取数 32×11bit（第 k 条 ↔ 窗口第 k 个 2B 槽，slot 0 = 最高 16bit；**高位序偏移**；
+  `mvld`=0/1/2/3（3 按 2）；`i=0` 查 MUX_PTR 低 3bit，`i=1` 用 `[7:0]`）；
+  ② 主 lane 8×15bit（`[3:0]bits0 [4]lr0 [7:5]shift0 [10:8]bits1 [11]lr1 [14:12]shift1`；
+  `bits=valid−1`、单/双操作数模式、整 lane 双向移位 + 静态窗 out0@bit0/out1@bit8）；
+  ③ CCR 8×5bit（32×2bit 条件码索引）；
+  ④ O 取数 16×11bit（slot k 为源、偏移为 deposit 目标）；⑤ O lane 4×15bit。
 - **CSR 所有权**：建线程初始化（含 `MUX_PTR` 默认值、CW 窗预发射）由平台写；
-  运行期 `CCR` 走 `ccr_in/ccr_out → DMUX → 32B CCR 表 + CSR 0x2 镜像`；
+  运行期 `CCR` 走 `ccr_in/ccr_out → DMUX → 64bit CCR + CSR 0x2 镜像`；
   `MUX_PTR`/`TH_STAT`/`CUR_TS` 走 EU 的通用 CSR 写口（其中 `TH_STAT=DONE` 由 EU 在末条 task 完成时写）；
   `CUR_TS` 暂由线程池顺序推进（跳转微指令到位后切给 EU）。
 - **回刷契约**：EU 的 `done` 拍 `rf_out/rmw_out` 同拍有效，`poe_thread_bank` 同拍落表
   （不能再打一拍，否则线程池的下一条 task 会读到旧 RF）。
 - **EU 边界契约**：`task 握手 / 64B 窗口 in-out / 通用 CSR 读写 / done+done_tid /
   err_out（随结果拍有效）/ 微指令 bank 预载口`；比较侧已覆盖 CSR、RF、出口 KO、EU err。
-  另加 **2B CCR 口**：`ccr_in`（MUX 按 MXCC 选出的 2B）→ `ccr_out`（EU 写回的 2B，交 DMUX 回填）。
-  `./run.sh` 开头会做一次 **MXS 语义自检**（`MXS_SELFTEST 65536 组往返 OK`，含设计给的例子
-  `0xABCD → 0x50CC`），失败会直接让 `SMOKE FAIL`。
+  另加 **16bit CCR 口**：`ccr_in`（MUX 8×5bit 提取的 8×2bit）→ `ccr_out`（EU 写回的 8×2bit，交 DMUX deposit）。
+  `./run.sh` 开头会做一次 **lane 语义自检**（`LANE_SELFTEST 65536 组往返 OK`，含文档 R4 的直通/二操作数例子），
+  失败会直接让 `SMOKE FAIL`。
 
 ## 接真实 EU 的替换清单（即插即用）
 
@@ -98,11 +99,11 @@ TESTNAME=poe_base_test ./run_uvm.sh     # UVM：2 个 KO，(tid,ts) 配对比对
 2. 删掉示例模型的映射段（"POE CSR ↔ RISC-V CSR"映射、`win_in → in_regs[1023:512]` 高半区
    映射、末条 task 代写 `TH_STAT=DONE` 的占位），改成真实 EU 自己的 CSR/窗口接口；
 3. 保持这些契约不变：`task_vld/task_tid/task_sub_pc/task_last/task_rdy`、
-   `win_in/win_out/win_we`（64B）、`ccr_in → ccr_out`（2B CCR）、
+   `win_in/win_out/win_we`（64B）、`ccr_in → ccr_out`（16bit = 8×2bit CCR）、
    `csr_snap → csr_we/csr_wtid/csr_waddr/csr_ww/csr_wdata`（`TH_STAT/CUR_TS/MUX_PTR` 等；CCR 不走这里）、
    `done/done_tid`、`err_out`（随结果拍）、`imem_we/saddr/waddr/wdata`（微指令存储预载）；
 4. 跑三条回归：`./run.sh`、`./run_pool_smoke.sh`、`TESTNAME=poe_base_test ./run_uvm.sh`，
    期望 `SMOKE PASS` / `UVM_ERROR 0`。
 
 注：平台侧 `imem_*`（EU 内微指令存储预载）与 `mux_imem_*`（MUX 指令存储预载）是**两组独立端口**；
-MUX 指令存储属平台（`rtl/poe_mux_imem.sv`，16 行 × 1280bit），换 EU 时不动。
+MUX 指令存储属平台（`rtl/poe_mux_imem.sv`，16 行 × 768bit），换 EU 时不动。

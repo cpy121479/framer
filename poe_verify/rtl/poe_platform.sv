@@ -7,13 +7,13 @@
 //   poe_thr_pool（多线程池）：建线程 → 按 CUR_TS 取 ts 行 → 逐条 burst 发 task(sub_pc)
 //        |
 //        v
-//   poe_mux（MUX 级）：按 sub_pc 读 MUX 指令行 → 从该线程 256B RF 取数 + MXS 移位
-//        |                                   ^  读 MUX_PTR(CSR 0x16) / CCR 表(MXCC)
+//   poe_mux（MUX 级）：按 sub_pc 读 MUX 指令行 → 32 fetcher 高位序取数 + 8 lane 移位
+//        |                                   ^  读 MUX_PTR(CSR 0x16) / CCR64(8×5bit 提取)
 //        v                                   |
-//   poe_eu_dut / poe_eu_rm（共享一份）—— 64B 窗口 + 2B CCR 进，64B 结果 + 2B CCR 出
+//   poe_eu_dut / poe_eu_rm（共享一份）—— 64B 窗口 + 16bit CCR 进，64B 结果 + 16bit CCR 出
 //        |                                   |        （TH_STAT/CUR_TS 等仍走 CSR 写口）
 //        v                                   |
-//   poe_dmux（DMUX 级）：逆 MXS + 逆取数回填 RF（掩码保护）/ 回填 32B CCR 表 / 累积 O 窗
+//   poe_dmux（DMUX 级）：lane 逆变换 + 32/16 fetcher deposit 回 RF/CCR64/O 窗（每 task）
 //        |                       |           |
 //        |                       |           +-- 线程结束 → 出口 KO 直出 = {O 窗 32B, 入口 KO 低 16B}
 //        |                       +-------------- 每个 task 一次回填（bank）
@@ -52,7 +52,7 @@ module poe_platform #(
     // ---- 预载：MUX 指令存储 ----
     input  logic             mux_imem_we,     // MUX 指令存储写使能
     input  logic [MUX_AW-1:0] mux_imem_waddr, // 行号 = sub_pc
-    input  logic [MUX_ROW_W-1:0] mux_imem_wdata, // 一行 = 五组字段（见 poe_pkg 的 ⑤ 节），1280bit
+    input  logic [MUX_ROW_W-1:0] mux_imem_wdata, // 一行 = 五组字段（见 poe_pkg 的 ⑤ 节），768bit
     // ---- 出口 KO（由 DMUX 在末条 task 的结果拍再生并直出）----
     output logic             out_vld,         // 出口 KO 有效（一拍）
     output logic [383:0]     out_data,        // 出口 48B 报文 = {O 窗 32B, 入口 KO 低 16B}
@@ -104,10 +104,10 @@ module poe_platform #(
     logic [TID_W-1:0]     mux_rf_rd_tid;     // MUX 要读哪个线程的 RF
     logic [RF_W-1:0]      mux_rf_rd;         // 该线程整份 RF
     logic [TID_W-1:0]     mux_ccr_rtid;      // MUX 要读哪个线程的 CCR 表
-    logic [CCR_W-1:0]     mux_ccr_rd;        // 该线程整份 32B CCR 表
+    logic [CCR_W-1:0]     mux_ccr_rd;        // 该线程 64bit CCR（32×2bit）
     logic [TID_W-1:0]     mux_csr_rtid;      // MUX 要读哪个线程的 CSR
     logic [WIN_W-1:0]     mux_win_data;      // 组好的 64B 窗口
-    logic [15:0]          mux_win_ccr;       // MXCC 选出的 2B CSR（CCR）
+    logic [15:0]          mux_win_ccr;       // 8×5bit 提取出的 16bit CCR（8×2bit）
     logic                 mux_win_vld;       // 窗口有效
     logic [TID_W-1:0]     mux_win_tid;       // 窗口属于哪个线程
     logic [3:0]           mux_win_sub_pc;    // 微指令行号
@@ -131,11 +131,10 @@ module poe_platform #(
     logic                 dmux_rf_we;        // DMUX 回填 RF（一拍，一个 task 一次）
     logic [TID_W-1:0]     dmux_rf_tid;       //   回填哪个线程
     logic [RF_W-1:0]      dmux_rf_wdata;     //   回填后的整份 RF
-    logic                 dmux_ccr_we;       // DMUX 回填 2B CCR（+ 镜像 CSR 0x2）
+    logic                 dmux_ccr_we;       // DMUX 回填 64bit CCR（+ 16bit 镜像 CSR 0x2）
     logic [TID_W-1:0]     dmux_ccr_tid;      //   回填哪个线程
-    logic [4:0]           dmux_ccr_a0;       //   高字节落点
-    logic [4:0]           dmux_ccr_a1;       //   低字节落点
-    logic [15:0]          dmux_ccr_wdata;    //   要写回的 2B
+    logic [CCR_W-1:0]     dmux_ccr_wdata;    //   放回后的 64bit CCR（32×2bit）
+    logic [15:0]          dmux_ccr_mirror;   //   EU 写回的 16bit（8×2bit），镜像 CSR 0x2
     logic [N_THR*KO_LO_W-1:0] ko_lo_flat;    // 入口 KO 低 16B（每线程一份，供 DMUX 再生出口 KO）
 
     // ---- 上下文存储读口（功能用单线程，事件用单快照）----
@@ -214,13 +213,12 @@ module poe_platform #(
         .dmux_rf_we(dmux_rf_we),        // DMUX 回填整份 RF（一个 task 一次）
         .dmux_rf_tid(dmux_rf_tid),
         .dmux_rf_wdata(dmux_rf_wdata),
-        .ccr_rtid(mux_ccr_rtid),        // MUX 读 CCR 表（MXCC 选 2B）
+        .ccr_rtid(mux_ccr_rtid),        // MUX 读 64bit CCR（8×5bit 提取 8×2bit）
         .ccr_rd(mux_ccr_rd),
-        .ccr_we(dmux_ccr_we),           // DMUX 回填 2B CCR（+ 镜像 CSR 0x2）
+        .ccr_we(dmux_ccr_we),           // DMUX 回填 64bit CCR（+ 镜像 CSR 0x2）
         .ccr_wtid(dmux_ccr_tid),
-        .ccr_a0(dmux_ccr_a0),
-        .ccr_a1(dmux_ccr_a1),
         .ccr_wdata(dmux_ccr_wdata),
+        .ccr_mirror(dmux_ccr_mirror),
         .eu_csr_we(eu_csr_we),          // EU 侧 CSR 写（CCR/MUX_PTR/TH_STAT 都走这里）
         .eu_csr_wtid(eu_csr_wtid),
         .eu_csr_waddr(eu_csr_waddr),
@@ -259,7 +257,7 @@ module poe_platform #(
         .wdata   (mux_imem_wdata)
     );
 
-    // ---- MUX：RF 取数 + MXS 移位（回填在 DMUX，不在本模块）----
+    // ---- MUX：高位序取数 + 8 lane 移位（回填在 DMUX，不在本模块）----
     poe_mux #(
         .TID_W(TID_W), .RF_W(RF_W), .WIN_W(WIN_W)
     ) u_mux (
@@ -293,21 +291,17 @@ module poe_platform #(
         .task_done_tid (mux_task_done_tid)
     );
 
-    // ---- DMUX：逆 MXS + 逆取数回填 RF / 回填 CCR 表 / 累积 O 窗 + 线程结束再生出口 KO ----
+    // ---- DMUX：lane 逆变换 + 逆取数回填 RF / CCR64 deposit / 每 task 生成 O 窗 + 线程结束出口 KO ----
     poe_dmux #(
-        .TID_W(TID_W), .N_THR(N_THR), .RF_W(RF_W), .WIN_W(WIN_W)
+        .TID_W(TID_W), .RF_W(RF_W), .WIN_W(WIN_W)
     ) u_dmux (
-        .clk        (clk),
-        .rst_n      (rst_n),
-        .alloc      (alloc),                    // 建线程：清该线程 O 窗
-        .alloc_tid  (alloc_tid),
         .eu_done    (eu_done),                  // 当前 task 的 EU 结果拍
         .eu_done_tid(eu_done_tid),
         .ctx_tid    (mux_ctx_tid),              // 当前 task 上下文（来自 MUX）
         .ctx_last   (mux_ctx_last),
         .row        (mux_row),                  // 同一行 MUX 指令（按 ctx_pc 读出）
         .win_out    (eu_win_out),               // EU 处理后的 64B 窗
-        .ccr_out    (eu_ccr_out),               // EU 写回的 2B CCR
+        .ccr_out    (eu_ccr_out),               // EU 写回的 16bit CCR（8×2bit）
         .rf_rd      (mux_rf_rd),                // 该线程 RF 原值（掩码保护）
         .csr_snap   (csr_rd),                                   // 读 MUX_PTR（同一 task 的 tid）
         .ko_lo      (ko_lo_flat[mux_ctx_tid*KO_LO_W +: KO_LO_W]),// 入口 KO 低 16B
@@ -316,9 +310,8 @@ module poe_platform #(
         .rf_wdata   (dmux_rf_wdata),
         .ccr_we     (dmux_ccr_we),
         .ccr_tid    (dmux_ccr_tid),
-        .ccr_a0     (dmux_ccr_a0),
-        .ccr_a1     (dmux_ccr_a1),
         .ccr_wdata  (dmux_ccr_wdata),
+        .ccr_mirror (dmux_ccr_mirror),
         .out_vld    (out_vld),                  // 出口 KO 由 DMUX 直出
         .out_data   (out_data),
         .out_tid    (out_tid)

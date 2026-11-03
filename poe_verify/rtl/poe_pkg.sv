@@ -92,69 +92,65 @@ package poe_pkg;
     localparam int         CW_N       = 8;       // C 窗表项数
     localparam int         PRE_N      = 4;       // 预发射口一次预写的表项数（CW 窗低 4 项）
 
-    // ---- ⑤ MUX（RF 取数 + 移位）/ DMUX（回填 + O 窗 + KO 再生）----
-    //   一行 MUX 指令（按 sub_pc 索引，一行 = 一个 task 的完整画像）分五组字段：
-    //     ① 取数组  32 × 11bit  RF 取数：第 k 条 ↔ 64B 窗的第 k 个 2B 槽（**slot 0 = 最高 16bit**）
-    //     ② 移位组  32 × 15bit  MXS：与①一一配对，把取到的 16bit 里的字段左对齐到该 2B 槽
-    //     ③ CCR 选择 2 ×  5bit  MXCC[0] → CSR 高字节、MXCC[1] → CSR 低字节（索引 32B CCR 表）
-    //     ④ O 路取数 16 × 11bit  从 64B 窗取数填 32B O 窗（第 m 条 ↔ O 窗第 m 个 2B，m=0 最高）
-    //     ⑤ O 路移位 16 × 15bit  与④配对（DMUX 侧逆操作，同一套 MXS 语义）
-    //   行宽 1280bit：实际用到 1258bit，最高 22bit 预留（真实定义确定后再分配）。
+    // ---- ⑤ MUX / DMUX 指令画像（按 sub_pc 索引，一行 = 一个 task 的完整画像）----
+    //   功能口径按开发文档 mux_top/dmux_top（R15/R19 + lane_shifter R4）：
+    //     ① 取数    32 × 11bit   第 k 条 ↔ 64B 窗第 k 个 2B 槽（slot 0 = 最高 16bit）
+    //     ② 主 lane  8 × 15bit   主链 lane 移位指令（只处理高 16B；slot 8..31 直通）
+    //     ③ CCR      8 ×  5bit   8 条索引：32×2bit CCR（64bit）→ 8×2bit（16bit）给 EU
+    //     ④ O 取数  16 × 11bit   O 链 16 个 fetcher（源 = O 中间窗 slot k，目标 = 32B O 窗偏移）
+    //     ⑤ O lane   4 × 15bit   O 链 lane 移位指令（只处理高 8B；slot 4..15 直通）
+    //   行宽 768bit：实际用到 748bit，最高 20bit 预留。
     //
-    //   取数指令（11bit）：
-    //     [10]    i       0 = 偏移从 CSR MUX_PTR（0x16，8×8bit 表）里按 src_ptr 低 3bit 选一个字节偏移
-    //                     1 = [7:0] 直接就是字节偏移
-    //     [9:8]   mvld    从该偏移取几个字节：0（不取）/1/2（不是 +1）
-    //     [7:0]   src_ptr i=0 时选 MUX_PTR 表项；i=1 时是偏移本身
-    //   槽内字节序：**先取的字节放槽的高 8bit**（mvld=2 → 槽[15:8]=RF[off]、槽[7:0]=RF[off+1]；
-    //   mvld=1 → 槽[15:8]=RF[off]、槽[7:0]=0）。
+    //   取数指令（11bit）：[10]i [9:8]mvld [7:0]imm
+    //     i=0：低 3bit 选 8×8bit MUX_PTR 表；i=1：[7:0] 是偏移。
+    //     **高位序偏移**（文档 data_fetcher）：偏移 k 取 RF[255-k] 为高字节、
+    //     RF[254-k] 为低字节；mvld：0=全 0、1=只高字节、2/3=两个字节（3 按 2 处理）。
     //
-    //   MXS 移位指令（15bit）：[14:11]bits0 [10]lr0 [9:7]shift0 [6:4]bits1 [3]lr1 [2:0]shift1
-    //     · field0：按 lr0 侧跳过 shift0 位后取 bits0 位，**左对齐**放到 2B 槽的 bit15 起
-    //       （bits0>8 时会跨到第二字节高位，低位补 0；此时 bits1 不执行）
-    //     · field1：与 field0 **同一套取位规则**（都在整 16bit 源上按 lr 端数），**左对齐**放到 bit7 起
-    //       lr=0 从最高位侧数（左，bit15 起），lr=1 从最低位侧数（右，bit0 起）
-    //     · **全 0 的 MXS = 直通**（不做提取，16bit 原样搬运）—— 本版定义的逃逸编码，
-    //       bits0 是 4bit 表达不了"16bit 全取"，直通只能这样表达，等真实定义后替换
-    //   例（源 16bit = 0xABCD）：bits0=5 lr0=0 shift0=1 + bits1=7 lr1=1 shift1=1
-    //     → 0x50CC（= 1_01010_000_1100110_0，丢弃的 1 是 shift0 跳过的最高位）
-    localparam int MUX_AW      = 4;                                         // MUX 指令行号位宽（= sub_pc）
-    localparam int MUX_INS_N   = 32;                                        // ① / ② 的条数
-    localparam int MUX_INS_W   = 11;                                        // 取数指令位宽
-    localparam int MXS_W       = 15;                                        // 移位指令（MXS）位宽
-    localparam int MXCC_W      = 5;                                         // MXCC 位宽（索引 32B CCR → 5bit）
-    localparam int MXCC_N      = 2;                                         // MXCC 条数（高字节 / 低字节）
-    localparam int O_INS_N     = 16;                                        // ④ / ⑤ 的条数（32B O 窗 = 16 × 2B）
-    localparam int MF_FET_LSB  = 0;                                         // ① [351:0]
-    localparam int MF_MXS_LSB  = MF_FET_LSB  + MUX_INS_N*MUX_INS_W;         // ② [831:352]
-    localparam int MF_MXCC_LSB = MF_MXS_LSB  + MUX_INS_N*MXS_W;             // ③ [841:832]
-    localparam int MF_OFET_LSB = MF_MXCC_LSB + MXCC_N*MXCC_W;               // ④ [1017:842]
-    localparam int MF_OMXS_LSB = MF_OFET_LSB + O_INS_N*MUX_INS_W;           // ⑤ [1257:1018]
-    localparam int MUX_ROW_W   = 1280;                                      // 行宽（含最高 22bit 预留）
+    //   lane 指令（15bit，文档 lane_shifter R4）：
+    //     [3:0]bits0 [4]lr0 [7:5]shift0 [10:8]bits1 [11]lr1 [14:12]shift1
+    //     bits = valid-1；bits0[3]=1 为单操作数模式（valid0 9..16，bits1/lr1/shift1 忽略）。
+    //     两个 shifter 都作用在完整 16bit lane 上（lr=0 左移、lr=1 右移），
+    //     再与静态窗口相与：out0@bit0（valid0 位）、out1@bit8（valid1 位），两路 OR。
+    //     全 16bit 直通编码：bits0=15、lr0=0、shift0=0（单操作数模式 mask0=0xFFFF）。
+    //
+    //   CCR 指令（5bit）：纯索引 0..31；CCR 向量 32×2bit，index 0 = bits[63:62]；
+    //     MUX 的 8 条指令各取 1 个码，输出 16bit（fetcher 0 = 最高 2bit）；
+    //     DMUX 用同样 8 条指令把 16bit deposit 回 64bit（未选中位置 0）。
+    localparam int MUX_AW       = 4;      // 行号位宽（= sub_pc）
+    localparam int MUX_INS_N    = 32;     // ① 取数条数
+    localparam int MUX_INS_W    = 11;     // 取数指令位宽
+    localparam int LANE_W       = 15;     // lane 指令位宽
+    localparam int LANE_N       = 8;      // ② 主链 lane 条数
+    localparam int CCR_INS_W    = 5;      // ③ CCR 指令位宽
+    localparam int CCR_INS_N    = 8;      // ③ CCR 指令条数
+    localparam int O_INS_N      = 16;     // ④ O 链取数条数
+    localparam int O_LANE_N     = 4;      // ⑤ O 链 lane 条数
+    localparam int MF_FET_LSB   = 0;                                      // ① [351:0]
+    localparam int MF_LANE_LSB  = MF_FET_LSB  + MUX_INS_N*MUX_INS_W;      // ② [471:352]
+    localparam int MF_CCR_LSB   = MF_LANE_LSB + LANE_N*LANE_W;            // ③ [511:472]
+    localparam int MF_OFET_LSB  = MF_CCR_LSB  + CCR_INS_N*CCR_INS_W;      // ④ [687:512]
+    localparam int MF_OLANE_LSB = MF_OFET_LSB + O_INS_N*MUX_INS_W;        // ⑤ [747:688]
+    localparam int MUX_ROW_W    = 768;                                    // 行宽（20bit 预留）
 
     // 取数指令字段
     localparam int MI_I_LSB    = 10;                 // 立即偏移控制位
-    localparam int MI_MVLD_LSB = 8;                  // 取几个字节（0~2）
+    localparam int MI_MVLD_LSB = 8;                  // 取几个字节（0/1/2/3）
     localparam int MI_PTR_LSB  = 0;                  // src_ptr / 立即偏移
-    // MXS 字段
-    localparam int MXS_B0_LSB  = 11;                 // bits0[14:11]
-    localparam int MXS_B0_W    = 4;
-    localparam int MXS_LR0     = 10;                 // lr0：0 = 从最高位侧（左），1 = 从最低位侧（右）
-    localparam int MXS_S0_LSB  = 7;                  // shift0[9:7]
-    localparam int MXS_S0_W    = 3;
-    localparam int MXS_B1_LSB  = 4;                  // bits1[6:4]
-    localparam int MXS_B1_W    = 3;
-    localparam int MXS_LR1     = 3;                  // lr1
-    localparam int MXS_S1_LSB  = 0;                  // shift1[2:0]
-    localparam int MXS_S1_W    = 3;
+    // lane 指令字段（文档 R4，LSB→MSB）
+    localparam int LANE_B0_LSB = 0;  localparam int LANE_B0_W = 4;   // bits0
+    localparam int LANE_LR0    = 4;                                  // lr0
+    localparam int LANE_S0_LSB = 5;  localparam int LANE_S0_W = 3;   // shift0
+    localparam int LANE_B1_LSB = 8;  localparam int LANE_B1_W = 3;   // bits1
+    localparam int LANE_LR1    = 11;                                 // lr1
+    localparam int LANE_S1_LSB = 12; localparam int LANE_S1_W = 3;   // shift1
 
     localparam int WIN_B       = 64;                 // EU 操作数窗口字节数（64B）
     localparam int WIN_W       = WIN_B*8;            // 512bit
-    localparam int CCR_B       = 32;                 // 每线程 CCR 表字节数（32B；EU 只用 MXCC 选的 2B）
-    localparam int CCR_W       = CCR_B*8;            // 256bit
-    localparam int O_WIN_B     = 32;                 // 每线程 O 窗字节数（线程结束时再生 KO 的高 32B）
+    localparam int CCR_N       = 32;                 // 条件码个数（32×2bit）
+    localparam int CCR_W       = CCR_N*2;            // 64bit（不是 32 字节）
+    localparam int O_WIN_B     = 32;                 // 32B O 窗
     localparam int O_WIN_W     = O_WIN_B*8;          // 256bit
-    localparam int KO_LO_LSB   = 0;                  // 出口 KO 低 16B = 入口 KO 低 16B（原样保持）
+    localparam int KO_LO_LSB   = 0;                  // 出口 KO 低 16B = 入口 KO 低 16B
     localparam int KO_LO_W     = 128;
 
     // ---- MUX / DMUX 公共解码函数（两侧必须共用同一套，否则取数和回填会走偏）----
@@ -168,85 +164,96 @@ package poe_pkg;
         mux_mvld = ins[MI_MVLD_LSB +: 2];
     endfunction
 
-    // 从 width 位源里取一个字段：lr=0 从最高位侧跳过 shift 位；lr=1 从最低位侧跳过 shift 位
-    function automatic logic [15:0] mxs_field(input logic [15:0] src,
-                                             input logic        lr,
-                                             input logic [2:0]  shift,
-                                             input logic [3:0]  bits,
-                                             input int unsigned width);
-        automatic int unsigned msb, lo;
-        mxs_field = 16'd0;
-        if (bits == 4'd0) return 16'd0;
-        msb = lr ? (int'(shift) + int'(bits) - 1) : (width - 1 - int'(shift));
-        if ((msb + 1) >= int'(bits)) begin
-            lo = msb + 1 - int'(bits);
-            mxs_field = (src >> lo) & ((16'd1 << int'(bits)) - 16'd1);
-        end
+    // ---- 取数：文档 data_fetcher 的高位序语义 ----
+    //   偏移 off：高字节 = RF[255-off]，低字节 = RF[254-off]；mvld=3 按 2；越界补 0。
+    function automatic logic [15:0] fetch_word(input logic [2047:0] rf,
+                                               input logic [7:0]    off,
+                                               input logic [1:0]    mvld);
+        automatic int hi_idx;
+        automatic int lo_idx;
+        fetch_word = 16'd0;
+        if (mvld == 2'd0) return 16'd0;
+        hi_idx = 255 - int'(off);
+        lo_idx = 254 - int'(off);
+        if (hi_idx >= 0)
+            fetch_word[15:8] = rf[8*hi_idx +: 8];
+        if ((mvld == 2'd2 || mvld == 2'd3) && (lo_idx >= 0))
+            fetch_word[7:0] = rf[8*lo_idx +: 8];
     endfunction
 
-    // MXS（MUX 侧）：取到的 16bit → 2B 槽（field0 左对齐到 bit15 起、field1 左对齐到 bit7 起）
-    function automatic logic [15:0] mxs_align(input logic [15:0] src, input logic [MXS_W-1:0] mxs);
-        automatic logic [3:0]  b0;
-        automatic logic [2:0]  b1;
-        automatic logic        lr0, lr1;
-        automatic logic [2:0]  s0, s1;
-        automatic logic [15:0] f0, f1;
-        {b0, lr0, s0, b1, lr1, s1} = mxs;
-        mxs_align = 16'd0;
-        if (mxs == '0) begin
-            mxs_align = src;                                  // 直通
-        end else begin
-            if (b0 != 4'd0) begin
-                f0 = mxs_field(src, lr0, s0, b0, 16);
-                mxs_align = f0 << (16 - int'(b0));            // field0 左对齐到 bit15 起
-            end
-            if ((b0 <= 4'd8) && (b1 != 4'd0)) begin           // bits0>8 时 field1 不执行
-                // field1 与 field0 用**同一套取位规则**（都在整 16bit 源上按 lr 端数），
-                // 区别只在落点：field0 → 槽 bit15 起，field1 → 槽 bit7 起
-                f1 = mxs_field(src, lr1, s1, b1, 16);
-                mxs_align |= (f1 << (8 - int'(b1)));          // field1 左对齐到 bit7 起
-            end
-        end
+    // 16bit 双向桶移（lr=0 左移，lr=1 右移）
+    function automatic logic [15:0] shift16(input logic [15:0] x,
+                                            input logic        lr,
+                                            input logic [2:0]  sh);
+        shift16 = lr ? (x >> int'(sh)) : (x << int'(sh));
     endfunction
 
-    // MXS（DMUX 侧逆操作）：2B 槽 → 送回源 16bit 的原位；同时给出"哪些位要回填"的掩码
-    task automatic mxs_unshift(input  logic [15:0]      lane,
-                               input  logic [MXS_W-1:0] mxs,
-                               output logic [15:0]      val,
-                               output logic [15:0]      msk);
-        automatic logic [3:0]  b0;
-        automatic logic [2:0]  b1;
-        automatic logic        lr0, lr1;
-        automatic logic [2:0]  s0, s1;
-        automatic logic [15:0] f0, f1;
-        automatic int unsigned msb, lo;
-        {b0, lr0, s0, b1, lr1, s1} = mxs;
-        val = 16'd0;
-        msk = 16'd0;
-        if (mxs == '0) begin
-            val = lane;                                       // 直通：16bit 全回填
-            msk = 16'hFFFF;
+    // lane 正向（文档 lane_shifter R4）：整条 16bit lane 移位 → 静态窗口（out0@bit0、out1@bit8）→ OR
+    function automatic logic [15:0] lane_fwd(input logic [15:0] x,
+                                             input logic [14:0] ins);
+        automatic int unsigned v0, v1;
+        automatic logic [15:0] m0, m1;
+        v0 = int'(ins[LANE_B0_LSB +: LANE_B0_W]) + 1;
+        v1 = int'(ins[LANE_B1_LSB +: LANE_B1_W]) + 1;
+        m0 = 16'hFFFF >> (16 - v0);
+        m1 = ins[LANE_B0_LSB + 3] ? 16'd0 : ((16'hFFFF >> (16 - v1)) << 8);
+        lane_fwd = (shift16(x, ins[LANE_LR0], ins[LANE_S0_LSB +: LANE_S0_W]) & m0)
+                 | (shift16(x, ins[LANE_LR1], ins[LANE_S1_LSB +: LANE_S1_W]) & m1);
+    endfunction
+
+    // lane 反向（DMUX）：从静态窗口取回有效位，按相反方向移位回源位置；同时给出回填掩码
+    task automatic lane_rev(input  logic [15:0] x,
+                            input  logic [14:0] ins,
+                            output logic [15:0] val,
+                            output logic [15:0] msk);
+        automatic int unsigned v0, v1;
+        automatic logic [15:0] m0, m1, t0, t1;
+        v0 = int'(ins[LANE_B0_LSB +: LANE_B0_W]) + 1;
+        v1 = int'(ins[LANE_B1_LSB +: LANE_B1_W]) + 1;
+        m0 = 16'hFFFF >> (16 - v0);
+        m1 = ins[LANE_B0_LSB + 3] ? 16'd0 : ((16'hFFFF >> (16 - v1)) << 8);
+        t0 = x & m0;
+        if (ins[LANE_LR0]) begin
+            val = t0 << int'(ins[LANE_S0_LSB +: LANE_S0_W]);
+            msk = m0 << int'(ins[LANE_S0_LSB +: LANE_S0_W]);
         end else begin
-            if (b0 != 4'd0) begin
-                f0  = lane >> (16 - int'(b0));                 // 槽的 bit15 起 b0 位
-                msb = lr0 ? (int'(s0) + int'(b0) - 1) : (15 - int'(s0));
-                if ((msb + 1) >= int'(b0)) begin
-                    lo   = msb + 1 - int'(b0);
-                    val |= f0 << lo;
-                    msk |= ((16'd1 << int'(b0)) - 16'd1) << lo;
-                end
-            end
-            if ((b0 <= 4'd8) && (b1 != 4'd0)) begin
-                f1  = 16'(lane[7:0]) >> (8 - int'(b1));         // 第二字节的 bit7 起 b1 位
-                msb = lr1 ? (int'(s1) + int'(b1) - 1) : (15 - int'(s1));  // 与 mxs_align 同一套取位规则
-                if ((msb + 1) >= int'(b1)) begin
-                    lo   = msb + 1 - int'(b1);
-                    val |= f1 << lo;
-                    msk |= ((16'd1 << int'(b1)) - 16'd1) << lo;
-                end
+            val = t0 >> int'(ins[LANE_S0_LSB +: LANE_S0_W]);
+            msk = m0 >> int'(ins[LANE_S0_LSB +: LANE_S0_W]);
+        end
+        if (!ins[LANE_B0_LSB + 3]) begin
+            t1 = x & m1;
+            if (ins[LANE_LR1]) begin
+                val |= t1 << int'(ins[LANE_S1_LSB +: LANE_S1_W]);
+                msk |= m1 << int'(ins[LANE_S1_LSB +: LANE_S1_W]);
+            end else begin
+                val |= t1 >> int'(ins[LANE_S1_LSB +: LANE_S1_W]);
+                msk |= m1 >> int'(ins[LANE_S1_LSB +: LANE_S1_W]);
             end
         end
     endtask
+
+    // ---- CCR：32×2bit（64bit）与 8×2bit（16bit）的提取/放回（文档 ccr_conv/ccr_div）----
+    function automatic logic [15:0] ccr_extract(input logic [63:0] ccr,
+                                                input logic [39:0] instrs);
+        automatic int unsigned idx;
+        ccr_extract = 16'd0;
+        for (int k = 0; k < 8; k++) begin
+            idx = int'(instrs[5*k +: 5]);
+            ccr_extract[2*(7-k) +: 2] = ccr[63 - 2*idx -: 2];
+        end
+    endfunction
+
+    function automatic logic [63:0] ccr_deposit(input logic [15:0] ccr16,
+                                                input logic [39:0] instrs);
+        automatic int unsigned idx;
+        automatic logic [63:0] v;
+        v = 64'd0;
+        for (int k = 0; k < 8; k++) begin
+            idx = int'(instrs[5*k +: 5]);
+            v[63 - 2*idx -: 2] = v[63 - 2*idx -: 2] | ccr16[2*(7-k) +: 2];
+        end
+        ccr_deposit = v;
+    endfunction
 
     // ---- 画像打包小工具（TB / UVM 预载用，避免在用例里裸拼位号）----
     function automatic logic [MUX_INS_W-1:0] mux_fetch_pack(input logic        i,
@@ -254,9 +261,9 @@ package poe_pkg;
                                                            input logic [7:0]  ptr);
         mux_fetch_pack = {i, mvld, ptr};
     endfunction
-    function automatic logic [MXS_W-1:0] mux_mxs_pack(input logic [3:0] b0, input logic lr0, input logic [2:0] s0,
-                                                     input logic [2:0] b1, input logic lr1, input logic [2:0] s1);
-        mux_mxs_pack = {b0, lr0, s0, b1, lr1, s1};
+    function automatic logic [LANE_W-1:0] lane_pack(input logic [3:0] b0, input logic lr0, input logic [2:0] s0,
+                                                    input logic [2:0] b1, input logic lr1, input logic [2:0] s1);
+        lane_pack = {s1, lr1, b1, s0, lr0, b0};   // MSB→LSB：shift1|lr1|bits1|shift0|lr0|bits0
     endfunction
 
     // 访问位宽码（写/读口用它表示"本次访问多少个字节"）
@@ -283,7 +290,9 @@ package poe_pkg;
     localparam int KO_PRI_W    = 3;     // PRI 位宽
     localparam int KO_HEAD_LSB = 288;   // [319:288] POE_HEAD = 线程首条 burst 的加载地址
     localparam int KO_W        = 384;   // KO 报文位宽（48B）
-    localparam int KO_RF_BASE  = 128;   // 建线程时把 KO 从 RF 第 128 字节开始放（48B → RF[128..175]）
+    localparam int KO_RF_BASE  = 128;   // 建线程时 KO 放在 RF[128..175]（区域内降序：byte0 在 RF[175]）
+    // KO 在 RF 区域内降序存放：KO byte0 在 RF[175]；高位序 fetch 的第一个偏移 = 255-175 = 80
+    localparam int KO_FET_OFF  = 255 - (KO_RF_BASE + KO_W/8 - 1);
 
     // ---- 打包一条 29bit burst（供 burst 指令存储内部初始化程序镜像用）----
     // i/v task（bt=0）：低 8bit = sub_pc

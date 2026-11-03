@@ -68,27 +68,34 @@ class poe_base_test extends uvm_test;
         @(posedge vif.clk);
     endtask
 
-    // ---- MUX 画像：KO 回流路径（与微指令画像配套）----
-    //   bank 建线程时把 48B 入口 KO 放到 RF[128..175]（高字节在前）。
-    //     ① 取数组：前 16 条（KO 高 32B / 2B）← RF[128+2k, 129+2k]（i=1、mvld=2）；
-    //        其余 16 槽 mvld=0；② 移位组全 0 = 直通（KO 原样进窗口）
-    //     ③ MXCC：CCR[0]→高字节、CCR[1]→低字节
-    //     ④/⑤ O 路：O 窗第 m 个 2B ← 64B 窗字节 (2m, 2m+1)（EU 处理后的 KO 高 32B），直通
+    // ---- MUX 画像：KO 回流路径（按开发文档功能）----
+    //   bank 把入口 KO 48B 放在 RF[128..175]，区域内降序（KO byte0 在 RF[175]）。
+    //     ① 取数：前 16 条取 KO 高 32B（高位序偏移 KO_FET_OFF+2k），其余 16 条 mvld=0；
+    //     ② 主 lane：8 条直通（bits0=15/lr0=0/shift0=0）；
+    //     ③ CCR：8 条索引 0..7；
+    //     ④ O 取数：slot k 为源，偏移 2k deposit 到 32B O 窗；⑤ O lane 4 条直通。
     function bit [MUX_ROW_W-1:0] mux_row_img();
         bit [MUX_ROW_W-1:0] r;
+        bit [LANE_W-1:0]    lane_passthru;
         r = '0;
-        // ① 取数：KO 高 32B = RF[128..159] → 窗口 slot 0..15
-        for (int k = 0; k < O_INS_N; k++) begin
-            r[MF_FET_LSB + MUX_INS_W*k +: MUX_INS_W] = mux_fetch_pack(1'b1, 2'd2, 8'(KO_RF_BASE + 2*k));
-            r[MF_MXS_LSB + MXS_W*k +: MXS_W]         = '0;             // 直通
-        end
-        r[MF_MXCC_LSB +: MXCC_W]          = 5'd0;                      // 高字节 ← CCR 表第 0 字节
-        r[MF_MXCC_LSB + MXCC_W +: MXCC_W] = 5'd1;                      // 低字节 ← CCR 表第 1 字节
-        // ④/⑤ O 路：窗口 slot 0..15（EU 处理后的 KO 高 32B）→ O 窗
-        for (int m = 0; m < O_INS_N; m++) begin
-            r[MF_OFET_LSB + MUX_INS_W*m +: MUX_INS_W] = mux_fetch_pack(1'b1, 2'd2, 8'(2*m));
-            r[MF_OMXS_LSB + MXS_W*m +: MXS_W]         = '0;            // 直通
-        end
+        lane_passthru = lane_pack(4'hF, 1'b0, 3'd0, 3'd0, 1'b0, 3'd0);
+        // ① 取数：KO 高 32B → 窗口 slot 0..15
+        for (int k = 0; k < O_INS_N; k++)
+            r[MF_FET_LSB + MUX_INS_W*k +: MUX_INS_W] =
+                mux_fetch_pack(1'b1, 2'd2, 8'(KO_FET_OFF + 2*k));
+        // ② 主链 8 条 lane 直通
+        for (int k = 0; k < LANE_N; k++)
+            r[MF_LANE_LSB + LANE_W*k +: LANE_W] = lane_passthru;
+        // ③ CCR 8 条索引
+        for (int k = 0; k < CCR_INS_N; k++)
+            r[MF_CCR_LSB + CCR_INS_W*k +: CCR_INS_W] = k[4:0];
+        // ④ O 取数：slot k → O 偏移 2k
+        for (int k = 0; k < O_INS_N; k++)
+            r[MF_OFET_LSB + MUX_INS_W*k +: MUX_INS_W] =
+                mux_fetch_pack(1'b1, 2'd2, 8'(2*k));
+        // ⑤ O 链 4 条 lane 直通
+        for (int k = 0; k < O_LANE_N; k++)
+            r[MF_OLANE_LSB + LANE_W*k +: LANE_W] = lane_passthru;
         return r;
     endfunction
 

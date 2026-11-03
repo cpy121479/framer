@@ -33,7 +33,7 @@ interface poe_if (
     // ---- 预载：MUX 指令存储（一行 = 五组字段，见 poe_pkg 的 ⑤ 节）----
     logic         mux_imem_we;                  // 写使能
     logic [3:0]   mux_imem_waddr;               // 行号 = sub_pc
-    logic [MUX_ROW_W-1:0] mux_imem_wdata;       // 一行：取数 32×11 + 移位 32×15 + CCR 2×5 + O 路 16×11 + O 路移位 16×15
+    logic [MUX_ROW_W-1:0] mux_imem_wdata;       // 一行：取数 32×11 + 主 lane 8×15 + CCR 8×5 + O 取数 16×11 + O lane 4×15
     // ---- DUT 侧观测 ----
     logic         out_vld;        // 出口 KO 有效（一拍）
     logic [383:0] out_data;       // 出口 48B（EU 回刷结果）
