@@ -11,6 +11,7 @@ KO 48B + csr 预发射口
        │   └ poe_mux_imem MUX 指令存储（16 行 × 768bit，TB/test 预载）
        ├ poe_dmux         DMUX 级：8/4 lane 逆变换 + 32/16 fetcher 写回 RF/CCR64/O 窗；
        │                  线程结束 → 出口 KO = {O 窗 32B, 入口 KO 低 16B}
+       │   └ poe_dmux_imem DMUX 指令存储（与 MUX 独立，16 行 × 768bit）
        ├ poe_thread_bank  每线程一份 CSR + RF(256B) + CCR(64bit = 32×2bit)
        └ 共享一份 EU（poe_eu_dut = 替换点 / poe_eu_rm = 参考模型），64B 窗口 + 16bit CCR 进出
    → ts_done / thr_done 事件 + 观测事件总线（该线程 RF/CSR 快照）+ 出口 KO（由 DMUX 直出）
@@ -23,7 +24,7 @@ ts 粒度比对 CSR/RF 快照，按 `(tid, ts)` 配对，出口 KO 按 tid 配�
 
 | 目录 | 内容 |
 |---|---|
-| `rtl/` | 平台 RTL：`poe_pkg`（唯一位号/地址表）、`poe_thr_pool`（64 线程池）、`poe_burst_imem`（只读宏指令存储）、`poe_mux`/`poe_mux_imem`（MUX：取数+移位）、`poe_dmux`（DMUX：回填+O 窗+KO 再生）、`poe_thread_bank`（每线程 CSR+RF+CCR）、`poe_platform`、`poe_verify_top`、`poe_checker`、`poe_eu_dut`/`poe_eu_rm`（EU 边界壳） |
+| `rtl/` | 平台 RTL：`poe_pkg`（唯一位号/地址表）、`poe_thr_pool`（64 线程池）、`poe_burst_imem`（只读宏指令存储）、`poe_mux`/`poe_mux_imem`（MUX：取数+移位）、`poe_dmux`/`poe_dmux_imem`（DMUX：回填+O 窗+KO 再生，独立指令存储）、`poe_thread_bank`（每线程 CSR+RF+CCR）、`poe_platform`、`poe_verify_top`、`poe_checker`、`poe_eu_dut`/`poe_eu_rm`（EU 边界壳） |
 | `eu/` | sa-studio 生成的 rv32i 参考模型（与 `D:\EU核\sa-studio\rv32i` 一致，**不要改**） |
 | `tb/` | `poe_if`（UVM 激励/观测契约）、`tb_top`（RTL 自检）、`uvm_tb_top`、`pool_smoke_tb`（池级冒烟） |
 | `uvm/` | UVM 环境：item / seq / agent / monitor / scoreboard / env / tests |
@@ -52,7 +53,7 @@ TESTNAME=poe_base_test ./run_uvm.sh     # UVM：2 个 KO，(tid,ts) 配对比对
   示例 EU 模型是 128B 口，壳里把窗口放到高半区；接真实 64B EU 时把这段映射删掉即可。
   **建线程默认填非零 RF 测试图样**（`RF_INIT_PATTERN=1`：`byte[idx]=((idx*37)^tid^0x5A)`，0→0x5A），
   便于微指令不写 RF 时也能观察取数/移位/回填；设 `RF_INIT_PATTERN=0` 恢复清零。
-  **建线程同拍把入口 KO 48B 写入 RF[128..175]**，区域内**降序**（KO byte0 在 RF[175]）；
+  **建线程同拍把入口 KO 48B 写入 RF[1023:512] 的顶部**，区域内**降序**（KO byte0 在 RF 字节127）；
   当前 MUX 画像用高位序偏移 `KO_FET_OFF+2k` 取 KO 高 32B 到窗 slot 0..15，O 链再把这 32B
   deposit 到 32B O 窗；出口 KO = `{O 窗 32B, 入口 KO 低 16B}`。
 - **CCR（64bit）**：每线程有 **32×2bit=64bit CCR 向量**（独立于 CSR，建线程清零）。
@@ -71,7 +72,7 @@ TESTNAME=poe_base_test ./run_uvm.sh     # UVM：2 个 KO，(tid,ts) 配对比对
   UVM monitor 在 `obs_vld` 拍直接取走；RTL checker 比 DUT/RM 两份事件（要求同拍、同 tid、同 ts）。
   线程池功能需要的 `TH_STAT` 仍保留一张小表 `64×8bit`（不属于观测总线）。
 - **两级存储**：宏指令存储是只读 ROM（模块内部 initial 拼镜像，无写口）；
-  微指令存储（EU 内）与 MUX 指令存储都需要 TB/test 预载。
+  微指令存储（EU 内）、MUX 指令存储、DMUX 指令存储都需要 TB/test 预载；MUX/DMUX 指令存储物理独立。
 - **MUX/DMUX 指令行**（一行 = 一个 `sub_pc` 的完整画像，768bit，布局唯一定义在 `poe_pkg` ⑤ 节）：
   ① 取数 32×11bit（第 k 条 ↔ 窗口第 k 个 2B 槽，slot 0 = 最高 16bit；**高位序偏移**；
   `mvld`=0/1/2/3（3 按 2）；`i=0` 查 MUX_PTR 低 3bit，`i=1` 用 `[7:0]`）；
@@ -105,5 +106,5 @@ TESTNAME=poe_base_test ./run_uvm.sh     # UVM：2 个 KO，(tid,ts) 配对比对
 4. 跑三条回归：`./run.sh`、`./run_pool_smoke.sh`、`TESTNAME=poe_base_test ./run_uvm.sh`，
    期望 `SMOKE PASS` / `UVM_ERROR 0`。
 
-注：平台侧 `imem_*`（EU 内微指令存储预载）与 `mux_imem_*`（MUX 指令存储预载）是**两组独立端口**；
-MUX 指令存储属平台（`rtl/poe_mux_imem.sv`，16 行 × 768bit），换 EU 时不动。
+注：平台侧 `imem_*`（EU 内微指令存储预载）、`mux_imem_*`（MUX 指令存储）、`dmux_imem_*`（DMUX 指令存储）
+是**三组独立端口**；MUX/DMUX 指令存储属平台（各 16 行 × 768bit），换 EU 时不动。

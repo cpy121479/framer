@@ -290,9 +290,13 @@ package poe_pkg;
     localparam int KO_PRI_W    = 3;     // PRI 位宽
     localparam int KO_HEAD_LSB = 288;   // [319:288] POE_HEAD = 线程首条 burst 的加载地址
     localparam int KO_W        = 384;   // KO 报文位宽（48B）
-    localparam int KO_RF_BASE  = 128;   // 建线程时 KO 放在 RF[128..175]（区域内降序：byte0 在 RF[175]）
-    // KO 在 RF 区域内降序存放：KO byte0 在 RF[175]；高位序 fetch 的第一个偏移 = 255-175 = 80
-    localparam int KO_FET_OFF  = 255 - (KO_RF_BASE + KO_W/8 - 1);
+    // KO 存放区：RF[1023:512]（512bit = 64B），KO 48B 放在该区顶部并按高字节在前降序：
+    //   KO byte0 在 RF 字节 127（bit[1023:1016]），byte47 在 RF 字节 80（bit[647:640]）。
+    localparam int KO_RF_MSB_BIT = 1023; // KO 区最高 bit
+    localparam int KO_RF_LSB_BIT = 512;  // KO 区最低 bit
+    localparam int KO_RF_HI_BYTE = 127;  // KO byte0 所在 RF 字节
+    // 高位序 fetch：偏移 k 取 RF[255-k]/RF[254-k]；KO byte0 在字节 127 → 首偏移 = 128
+    localparam int KO_FET_OFF  = 255 - KO_RF_HI_BYTE;
 
     // ---- 打包一条 29bit burst（供 burst 指令存储内部初始化程序镜像用）----
     // i/v task（bt=0）：低 8bit = sub_pc

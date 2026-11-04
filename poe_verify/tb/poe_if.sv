@@ -34,6 +34,10 @@ interface poe_if (
     logic         mux_imem_we;                  // 写使能
     logic [3:0]   mux_imem_waddr;               // 行号 = sub_pc
     logic [MUX_ROW_W-1:0] mux_imem_wdata;       // 一行：取数 32×11 + 主 lane 8×15 + CCR 8×5 + O 取数 16×11 + O lane 4×15
+    // ---- 预载：DMUX 指令存储（与 MUX 独立）----
+    logic         dmux_imem_we;                 // 写使能
+    logic [3:0]   dmux_imem_waddr;              // 行号 = sub_pc
+    logic [MUX_ROW_W-1:0] dmux_imem_wdata;      // 一行 = 五组字段（布局同 MUX）
     // ---- DUT 侧观测 ----
     logic         out_vld;        // 出口 KO 有效（一拍）
     logic [383:0] out_data;       // 出口 48B（EU 回刷结果）

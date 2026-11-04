@@ -55,6 +55,7 @@ module poe_mux #(
     input  logic [TID_W-1:0] eu_done_tid,     // 结果属于哪个线程
     // ---- 当前 task 上下文（给 DMUX）----
     output logic [TID_W-1:0] ctx_tid,         // 当前 task 线程号
+    output logic [AW-1:0]    ctx_pc,          // 当前 task 行号（给 DMUX 指令存储读口）
     output logic             ctx_last,        // 当前 task 是否线程最后一条
     // ---- 回线程池 ----
     output logic             task_done,       // 一条 task 做完
@@ -99,6 +100,7 @@ module poe_mux #(
     assign win_data     = win_c;
     assign win_ccr      = ccr_c;
     assign ctx_tid      = tid_q;
+    assign ctx_pc       = pc_q;
     assign ctx_last     = last_q;
     assign task_done    = done_r;
     assign task_done_tid= done_tid_r;

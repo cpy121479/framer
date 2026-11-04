@@ -27,6 +27,10 @@ module tb_top;
     logic             mux_imem_we = 1'b0;
     logic [3:0]       mux_imem_waddr = '0;
     logic [MUX_ROW_W-1:0] mux_imem_wdata = '0;   // 一行 = 五组字段（768bit，见 poe_pkg ⑤）
+    // ---- DMUX 指令预载（独立存储）----
+    logic             dmux_imem_we = 1'b0;
+    logic [3:0]       dmux_imem_waddr = '0;
+    logic [MUX_ROW_W-1:0] dmux_imem_wdata = '0;
     // ---- 出口 / 观测 ----
     logic         out_vld;
     logic [383:0] out_data;
@@ -70,6 +74,9 @@ module tb_top;
         .mux_imem_we(mux_imem_we),
         .mux_imem_waddr(mux_imem_waddr),
         .mux_imem_wdata(mux_imem_wdata),
+        .dmux_imem_we(dmux_imem_we),
+        .dmux_imem_waddr(dmux_imem_waddr),
+        .dmux_imem_wdata(dmux_imem_wdata),
         .out_vld(out_vld),
         .out_data(out_data),
         .out_tid(out_tid),
@@ -93,6 +100,11 @@ module tb_top;
     // ---- 指令编码小工具（微指令画像用）----
     function automatic logic [31:0] ADD(input int rd, input int rs1, input int rs2);
         ADD = (rs2<<20)|(rs1<<15)|(rd<<7)|32'h33;                  // ADD rd,rs1,rs2
+    endfunction
+
+    // DMUX 默认画像与 MUX 相同；后续要独立改 DMUX 指令时只改这个函数。
+    function automatic logic [MUX_ROW_W-1:0] dmux_row_img();
+        return mux_row_img();
     endfunction
     function automatic logic [31:0] ADDI(input int rd, input int imm);
         ADDI = ((imm & 12'hFFF)<<20)|(rd<<7)|32'h13;               // ADDI rd,x0,imm
@@ -133,7 +145,7 @@ module tb_top;
     endtask
 
     // ---- MUX 画像：KO 回流路径（按开发文档功能）----
-    //   bank 把入口 KO 48B 放在 RF[128..175]，区域内降序（KO byte0 在 RF[175]）。
+    //   bank 把入口 KO 48B 放在 RF[1023:512] 顶部，区域内降序（KO byte0 在 RF 字节127）。
     //   一行 = 五组字段（布局见 poe_pkg 的 ⑤ 节）：
     //     ① 取数：前 16 条取 KO 高 32B，高位序偏移 KO_FET_OFF+2k；其余 16 条 mvld=0。
     //     ② 主 lane：8 条直通（bits0=15,lr0=0,shift0=0 → valid=16 / mask=0xFFFF）。
@@ -173,6 +185,16 @@ module tb_top;
             @(posedge clk); #1;
         end
         mux_imem_we = 1'b0;
+    endtask
+
+    task automatic preload_dmux_imem();
+        logic [MUX_ROW_W-1:0] row_img;
+        row_img = dmux_row_img();
+        for (int r = 0; r < 16; r++) begin
+            dmux_imem_we = 1'b1; dmux_imem_waddr = r[3:0]; dmux_imem_wdata = row_img;
+            @(posedge clk); #1;
+        end
+        dmux_imem_we = 1'b0;
     endtask
 
     // ---- 出口 KO / 线程结束计数 ----
@@ -292,6 +314,7 @@ module tb_top;
         lane_selftest(lane_ok);        // lane 正/反向语义自检（不依赖平台时序）
         preload_imem();
         preload_mux_imem();
+        preload_dmux_imem();
 
         // 2 个 KO = 2 个并发线程；第 2 个优先级更高（1 < 3），用来跑多线程调度
         // 预发射口：tid0 写全部 4 项；tid1 只写第 0/2 项（strb=0101，其余项应保持 0）

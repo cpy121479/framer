@@ -5,6 +5,7 @@
 ../rtl/poe_eu_dut.sv
 ../rtl/poe_thread_bank.sv
 ../rtl/poe_mux_imem.sv
+../rtl/poe_dmux_imem.sv
 ../rtl/poe_mux.sv
 ../rtl/poe_platform.sv
 ../rtl/poe_thr_pool.sv

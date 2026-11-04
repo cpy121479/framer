@@ -42,6 +42,10 @@ module poe_verify_top #(
     input  logic                 mux_imem_we,      // 写使能
     input  logic [MUX_AW-1:0]    mux_imem_waddr,   // 行号 = sub_pc
     input  logic [MUX_ROW_W-1:0] mux_imem_wdata,   // 一行 = 32 条 × 11bit
+    // ---- DMUX 指令存储预载（与 MUX 独立）----
+    input  logic                 dmux_imem_we,     // 写使能
+    input  logic [MUX_AW-1:0]    dmux_imem_waddr,  // 行号 = sub_pc
+    input  logic [MUX_ROW_W-1:0] dmux_imem_wdata,  // 一行 = 五组字段
     // ---- DUT 出口 KO（被验对象）----
     output logic             out_vld,
     output logic [383:0]     out_data,
@@ -100,6 +104,9 @@ module poe_verify_top #(
         .mux_imem_we(mux_imem_we),             // MUX 指令存储预载
         .mux_imem_waddr(mux_imem_waddr),
         .mux_imem_wdata(mux_imem_wdata),
+        .dmux_imem_we(dmux_imem_we),
+        .dmux_imem_waddr(dmux_imem_waddr),
+        .dmux_imem_wdata(dmux_imem_wdata),
         .out_vld(out_vld),
         .out_data(out_data),
         .out_tid(out_tid),
@@ -143,6 +150,9 @@ module poe_verify_top #(
         .mux_imem_we(mux_imem_we),
         .mux_imem_waddr(mux_imem_waddr),
         .mux_imem_wdata(mux_imem_wdata),
+        .dmux_imem_we(dmux_imem_we),
+        .dmux_imem_waddr(dmux_imem_waddr),
+        .dmux_imem_wdata(dmux_imem_wdata),
         .out_vld(out_vld_rm),
         .out_data(out_data_rm),
         .out_tid(out_tid_rm),

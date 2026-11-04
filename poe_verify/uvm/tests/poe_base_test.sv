@@ -69,7 +69,7 @@ class poe_base_test extends uvm_test;
     endtask
 
     // ---- MUX 画像：KO 回流路径（按开发文档功能）----
-    //   bank 把入口 KO 48B 放在 RF[128..175]，区域内降序（KO byte0 在 RF[175]）。
+    //   bank 把入口 KO 48B 放在 RF[1023:512] 顶部，区域内降序（KO byte0 在 RF 字节127）。
     //     ① 取数：前 16 条取 KO 高 32B（高位序偏移 KO_FET_OFF+2k），其余 16 条 mvld=0；
     //     ② 主 lane：8 条直通（bits0=15/lr0=0/shift0=0）；
     //     ③ CCR：8 条索引 0..7；
@@ -99,6 +99,11 @@ class poe_base_test extends uvm_test;
         return r;
     endfunction
 
+    // DMUX 默认画像与 MUX 相同；后续要独立改 DMUX 指令时只改这个函数。
+    function bit [MUX_ROW_W-1:0] dmux_row_img();
+        return mux_row_img();
+    endfunction
+
     task load_mux_imem();
         virtual poe_if vif = poe_uvm_pkg::g_vif;
         bit [MUX_ROW_W-1:0] row_img;
@@ -115,6 +120,22 @@ class poe_base_test extends uvm_test;
         @(posedge vif.clk);
     endtask
 
+    task load_dmux_imem();
+        virtual poe_if vif = poe_uvm_pkg::g_vif;
+        bit [MUX_ROW_W-1:0] row_img;
+        wait (vif.rst_n === 1'b1);
+        row_img = dmux_row_img();
+        for (int r = 0; r < 16; r++) begin
+            @(posedge vif.clk);
+            vif.dmux_imem_we    <= 1'b1;
+            vif.dmux_imem_waddr <= r[3:0];
+            vif.dmux_imem_wdata <= row_img;
+        end
+        @(posedge vif.clk);
+        vif.dmux_imem_we <= 1'b0;
+        @(posedge vif.clk);
+    endtask
+
     task run_phase(uvm_phase phase);
         poe_ko_seq seq;
         int done_cnt = 0;
@@ -123,6 +144,7 @@ class poe_base_test extends uvm_test;
         phase.raise_objection(this);
         load_imem();
         load_mux_imem();
+        load_dmux_imem();
         seq = poe_ko_seq::type_id::create("seq");
         seq.n_ko = 2;              // 本版先发 2 个 KO（两个并发线程）
         seq.head = 32'd0;          // 程序基址 = burst 指令存储第 0 行

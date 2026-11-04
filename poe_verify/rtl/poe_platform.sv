@@ -53,6 +53,10 @@ module poe_platform #(
     input  logic             mux_imem_we,     // MUX 指令存储写使能
     input  logic [MUX_AW-1:0] mux_imem_waddr, // 行号 = sub_pc
     input  logic [MUX_ROW_W-1:0] mux_imem_wdata, // 一行 = 五组字段（见 poe_pkg 的 ⑤ 节），768bit
+    // ---- 预载：DMUX 指令存储（与 MUX 存储物理分开）----
+    input  logic             dmux_imem_we,    // DMUX 指令存储写使能
+    input  logic [MUX_AW-1:0] dmux_imem_waddr,// 行号 = sub_pc
+    input  logic [MUX_ROW_W-1:0] dmux_imem_wdata, // 一行 = 五组字段
     // ---- 出口 KO（由 DMUX 在末条 task 的结果拍再生并直出）----
     output logic             out_vld,         // 出口 KO 有效（一拍）
     output logic [383:0]     out_data,        // 出口 48B 报文 = {O 窗 32B, 入口 KO 低 16B}
@@ -101,6 +105,8 @@ module poe_platform #(
     // ---- MUX ---- 
     logic [MUX_AW-1:0]    mux_rd_addr;       // MUX 指令行号
     logic [MUX_ROW_W-1:0] mux_row;           // MUX 指令行
+    logic [MUX_AW-1:0]    dmux_rd_addr;      // DMUX 指令行号（= 当前 task 的 pc）
+    logic [MUX_ROW_W-1:0] dmux_row;          // DMUX 指令行（独立存储）
     logic [TID_W-1:0]     mux_rf_rd_tid;     // MUX 要读哪个线程的 RF
     logic [RF_W-1:0]      mux_rf_rd;         // 该线程整份 RF
     logic [TID_W-1:0]     mux_ccr_rtid;      // MUX 要读哪个线程的 CCR 表
@@ -114,6 +120,7 @@ module poe_platform #(
     logic                 mux_win_last;      // 本 task 是线程最后一条
     logic                 mux_win_rdy;       // EU 能否收窗口
     logic [TID_W-1:0]     mux_ctx_tid;       // 当前 task 上下文：线程号
+    logic [MUX_AW-1:0]    mux_ctx_pc;        // 当前 task 上下文：行号
     logic                 mux_ctx_last;      // 当前 task 上下文：是否线程最后一条
 
     // ---- EU ----
@@ -209,7 +216,7 @@ module poe_platform #(
         .alloc(alloc),
         .alloc_tid(alloc_tid),
         .alloc_base_ts(alloc_base_ts),
-        .alloc_ko(ko_data),             // 建线程同拍把入口 KO 写入 RF[128..175]
+        .alloc_ko(ko_data),             // 建线程同拍把入口 KO 写入 RF[1023:512] 顶部
         .dmux_rf_we(dmux_rf_we),        // DMUX 回填整份 RF（一个 task 一次）
         .dmux_rf_tid(dmux_rf_tid),
         .dmux_rf_wdata(dmux_rf_wdata),
@@ -247,7 +254,7 @@ module poe_platform #(
     poe_mux_imem #(
         .ROWS (TS_MAX),     // 行数与 EU 微指令 bank 对齐
         .AW   (MUX_AW),     // 行号位宽
-        .ROW_W(MUX_ROW_W)   // 32×11bit
+        .ROW_W(MUX_ROW_W)   // 一行 768bit
     ) u_mux_imem (
         .clk     (clk),
         .rd_addr (mux_rd_addr),
@@ -255,6 +262,21 @@ module poe_platform #(
         .we      (mux_imem_we),
         .waddr   (mux_imem_waddr),
         .wdata   (mux_imem_wdata)
+    );
+
+    // ---- DMUX 指令存储（与 MUX 独立预载/内容）----
+    assign dmux_rd_addr = mux_ctx_pc;
+    poe_dmux_imem #(
+        .ROWS (TS_MAX),
+        .AW   (MUX_AW),
+        .ROW_W(MUX_ROW_W)
+    ) u_dmux_imem (
+        .clk     (clk),
+        .rd_addr (dmux_rd_addr),
+        .rd_row  (dmux_row),
+        .we      (dmux_imem_we),
+        .waddr   (dmux_imem_waddr),
+        .wdata   (dmux_imem_wdata)
     );
 
     // ---- MUX：高位序取数 + 8 lane 移位（回填在 DMUX，不在本模块）----
@@ -286,6 +308,7 @@ module poe_platform #(
         .eu_done       (eu_done),
         .eu_done_tid   (eu_done_tid),
         .ctx_tid       (mux_ctx_tid),
+        .ctx_pc        (mux_ctx_pc),
         .ctx_last      (mux_ctx_last),
         .task_done     (mux_task_done),
         .task_done_tid (mux_task_done_tid)
@@ -299,7 +322,7 @@ module poe_platform #(
         .eu_done_tid(eu_done_tid),
         .ctx_tid    (mux_ctx_tid),              // 当前 task 上下文（来自 MUX）
         .ctx_last   (mux_ctx_last),
-        .row        (mux_row),                  // 同一行 MUX 指令（按 ctx_pc 读出）
+        .row        (dmux_row),                 // DMUX 自己的指令存储（按 ctx_pc 读出）
         .win_out    (eu_win_out),               // EU 处理后的 64B 窗
         .ccr_out    (eu_ccr_out),               // EU 写回的 16bit CCR（8×2bit）
         .rf_rd      (mux_rf_rd),                // 该线程 RF 原值（掩码保护）

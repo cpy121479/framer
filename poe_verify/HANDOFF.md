@@ -13,13 +13,14 @@
 
 ## 2. 文件分组
 
-### A. 平台 RTL（12 个，全部必填）
+### A. 平台 RTL（13 个，全部必填）
 
 | 文件 | 说明 |
 |---|---|
 | `rtl/poe_pkg.sv` | **唯一位号/地址表**（burst 字段 / ts 行 / CSR 地址 / MUX 指令字段）；必须最先编 |
 | `rtl/poe_burst_imem.sv` | 宏指令存储（只读 ROM，每线程一个组合读口） |
 | `rtl/poe_mux_imem.sv` | MUX 指令存储（16 行 × 768bit = 五组字段，TB 预载） |
+| `rtl/poe_dmux_imem.sv` | DMUX 指令存储（与 MUX 独立，16 行 × 768bit，TB 预载） |
 | `rtl/poe_mux.sv` | MUX 级：32 fetcher 高位序取数 + 8 lane 移位 → 64B 窗；8×5bit CCR 提取 16bit 给 EU |
 | `rtl/poe_dmux.sv` | DMUX 级：8/4 lane 逆变换 + 32/16 fetcher deposit 回 RF/CCR64/O 窗 + 出口 KO |
 | `rtl/poe_thread_bank.sv` | 每线程一份 CSR（90B）+ RF（256B）+ CCR（64bit = 32×2bit） |
@@ -73,7 +74,7 @@
 - **include 路径**：`poe_verify/uvm`（给 `include "item/..."` 等）+ UVM 库的 `src`（给 `` `include "uvm_macros.svh" ``）
 - **顺序**（package 必须在前）：
   1. `rtl/poe_pkg.sv`
-  2. 其余 `rtl/*.sv`（12 个里去掉 poe_pkg）
+  2. 其余 `rtl/*.sv`（13 个里去掉 poe_pkg）
   3. `eu/isa_pkg.sv` → `eu/isa_formats_pkg.sv` → `eu/isa_instr_pkg.sv` → 其余 `eu/*.sv`
   4. `tb/*`（UVM 目标再加 `uvm/poe_uvm_pkg.sv`）
 - **宏/define**：**不需要任何 `+define+`**（代码里没有 ifdef 开关；只需给 UVM 目标的 `uvm_macros.svh`）
@@ -110,9 +111,11 @@ UVM：    CSR 4 次错 0；RF 4 次错 0；出口 KO 2 次错 0；EU 错误标�
 - **观测接口**：平台输出 `ts_done` **事件快照总线** `obs_vld/obs_tid/obs_ts/obs_rf(2048b)/obs_csr(720b)`
   （约 2.8kbit，一拍有效），不再有 64 线程全表快照；UVM monitor 和 RTL checker 都在 `obs_vld` 拍取。
   线程池功能用的 `th_stat_flat` 仍是一张 `64×8bit` 小表，不属于观测总线。
-- **KO 回流路径**：建线程同拍把入口 KO 48B 写入 RF[128..175]（区域内降序，KO byte0 在 RF[175]；
+- **KO 回流路径**：建线程同拍把入口 KO 48B 写入 RF[1023:512] 顶部（区域内降序，KO byte0 在 RF 字节127；
   bank 端口 `alloc_ko`，平台接 `ko_data`）；MUX 用高位序偏移 `KO_FET_OFF+2k` 取 KO 高 32B 到
   64B 窗 slot 0..15，O 链按偏移 2k deposit 到 O 窗；出口 KO = `{O 窗 32B, 入口 KO 低 16B}`。
+- **指令存储**：MUX 与 DMUX 的指令存储物理独立（`poe_mux_imem` / `poe_dmux_imem`），
+  预载口分别是 `mux_imem_*` / `dmux_imem_*`；默认画像相同，后续可独立修改。
 - `eu/` 是 sa-studio 生成的 rv32i 参考模型，DUT/RM 两个壳内部都例化同一份 —— 所以今天
   DUT vs RM 比对通过只代表"自洽"，接真实 EU 后才开始真验证。
 - 接真实 EU 时**只改 `rtl/poe_eu_dut.sv`**，替换步骤见 `README.md` 的"接真实 EU 的替换清单"。
