@@ -6,13 +6,13 @@
 //   ② 优先级调度：先扣住 EU（task_rdy=0）让 6 个线程全部就位，再放行；
 //      观察发射顺序 = 每个发射点都取 (pri 最小, 同 pri age 最小)
 //   ③ 不抢占：假 EU 一条 task 占用 EU_LAT 拍，占用期间不再收新 task
-//   ④ 多 ts：每线程跑 2 个 ts（ts0 + 跳转落点 ts3）→ 共 4 条 task
+//   ④ 多 ts：每线程跑 3 个 ts（ts0 + br ts1 + 跳转落点 ts3）→ 共 6 条 task
 //   ⑤ 出口 KO：由（假）DMUX 直出（真平台里是 DMUX 用 O 窗再生）；池子收"已发出 + 已取走"
 //      两个信息后才释放槽位，且出口 KO 的低 16B 原样保持入口 KO 的低 16B
 //
 // 期望顺序（确定性）：严格优先级 + 不抢占 ⇒ 高优先级线程只要有下一条 task 要发，
 //   就在每个发射点压住低优先级线程；两个线程的 done 相差 1 拍时，发射序列会交错：
-//     tid5/3（pri 0/1）16 条 → tid1/4（pri 3，老 1 先）8 条 → tid0/2（pri 5/7）8 条
+//     tid5/3（pri 0/1）12 条 → tid1/4（pri 3，老 1 先）12 条 → tid0/2（pri 5/7）12 条
 //   同 pri 的 tid1(age1)/tid4(age4)：第一个发射点是 tid1 先，之后两者交错。
 //
 // 程序镜像用 poe_burst_imem 内部初始化（每线程例化一份 = 组合多读口）：
@@ -29,10 +29,10 @@ module pool_smoke_tb;
     localparam int TS_W    = 4;    // ts 行号位宽
     localparam int N_BURST = 8;    // 每 ts 最多 burst 数
     localparam int N_KO    = 6;    // 冒烟 KO 数
-    localparam int N_TASK_PER_THR = 4;   // ts0 两条 + ts3 两条
+    localparam int N_TASK_PER_THR = 6;   // ts0 两条 + ts1 两条 + ts3 两条
     localparam int EU_LAT  = 12;   // 假 EU 一条 task 占用的拍数
     localparam int TASK_TOTAL = N_KO * N_TASK_PER_THR;
-    localparam int TS_DONE_TOTAL = N_KO * 2;   // 每线程 2 个 ts 边界
+    localparam int TS_DONE_TOTAL = N_KO * 3;   // 每线程 3 个 ts 边界
 
     logic clk;
     logic rst_n = 1'b0;
@@ -265,9 +265,9 @@ module pool_smoke_tb;
 
     initial begin
         // pri0/1 两组把 EU 占住；同 pri 的老线程先拿到第一个发射点，之后两者交错
-        exp_order = '{3'd5, 3'd3, 3'd5, 3'd3, 3'd5, 3'd3, 3'd5, 3'd3,
-                      3'd1, 3'd4, 3'd1, 3'd4, 3'd1, 3'd4, 3'd1, 3'd4,
-                      3'd0, 3'd2, 3'd0, 3'd2, 3'd0, 3'd2, 3'd0, 3'd2};
+        exp_order = '{3'd5, 3'd3, 3'd5, 3'd3, 3'd5, 3'd3, 3'd5, 3'd3, 3'd5, 3'd3, 3'd5, 3'd3,
+                      3'd1, 3'd4, 3'd1, 3'd4, 3'd1, 3'd4, 3'd1, 3'd4, 3'd1, 3'd4, 3'd1, 3'd4,
+                      3'd0, 3'd2, 3'd0, 3'd2, 3'd0, 3'd2, 3'd0, 3'd2, 3'd0, 3'd2, 3'd0, 3'd2};
 
         rst_n = 1'b0;
         repeat (4) @(posedge clk);

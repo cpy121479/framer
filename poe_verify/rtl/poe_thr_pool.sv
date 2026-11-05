@@ -23,7 +23,8 @@
 // 事件：ts_done / thr_done 只在被服务的下一拍各拉高**一拍**，避免仲裁排队时重复计数。
 //
 // 占位（接真实 EU 后替换，平台其它部分不动）：
-//   · br=1 的 ts 阻塞后"总是跳"，跳转落点取自镜像行的 jump_target 字段
+//   · br=1 的 ts **先正常执行完本 ts**；T_TSEND 后进入 T_BRWAIT，等跳转结果刷新 CUR_TS，
+//     下一个 ts 在跳转完成前不执行；跳转落点取自镜像行的 jump_target 字段（当前总是跳）
 //   · c_task（bt=1）不发 EU，直接跳过并计数（等 SMC 通路）
 //   注意：跳转落点那一行的头 burst 必须是 br=0，否则会再次阻塞（占位实现的限制）
 // ============================================================================
@@ -269,10 +270,6 @@ module poe_thr_pool #(
                         if (t_bid[t] >= r_n[t]) begin
                             t_ph[t] <= 2'd0;
                             t_st[t] <= T_TSEND;
-                        // 本 ts 头 burst 的 br=1：本 ts 被阻塞（等上个 ts 的结果刷新 CUR_TS）。
-                        // 放在发 task 之前判，保证 br 行一条 burst 都不会误发。
-                        end else if (t_bid[t] == 4'd0 && r_b[t][0][BF_ST] && r_b[t][0][BF_BR]) begin
-                            t_st[t] <= T_BRWAIT;
                         end else if (r_b[t][t_bid[t][BIDX_W-1:0]][BF_BT]) begin
                             // c_task 本版不发 EU（等 SMC 通路），跳过并计数
                             t_bid[t] <= t_bid[t] + 4'd1;
@@ -286,7 +283,7 @@ module poe_thr_pool #(
                     T_WAIT: begin
                         if (eu_done && (eu_done_tid == t[TID_W-1:0])) t_st[t] <= T_ISS;
                     end
-                    // ts 边界：先发 ts_done 事件，再写 CUR_TS；末 ts → T_DONE
+                    // ts 边界：先发 ts_done 事件；再按 br 决定跳转/顺序推进/收尾
                     T_TSEND: begin
                         if (t_ph[t] == 2'd0) begin
                             if (served && (sel_rq == RQ_EVENT)) begin
@@ -295,6 +292,11 @@ module poe_thr_pool #(
                                 ts_done_tid_r <= t[TID_W-1:0];
                                 ts_done_idx_r <= t_cur[t];
                             end
+                        end else if (r_b[t][0][BF_ST] && r_b[t][0][BF_BR]) begin
+                            // br=1：本 ts 已执行完，先阻塞下一个 ts，等 T_BRWAIT 跳转结果
+                            t_ph[t]  <= 2'd0;
+                            t_bid[t] <= '0;
+                            t_st[t]  <= T_BRWAIT;
                         end else if (served && (sel_rq == RQ_CSR)) begin
                             // 进入下一个 ts：CUR_TS 推进 + bid 归零（否则会从"上个 ts 的条数"继续数）
                             t_cur[t] <= t_cur[t] + 1'b1;   // 取指指针（唯一权威）
@@ -308,7 +310,7 @@ module poe_thr_pool #(
                             t_st[t]  <= T_DONE;
                         end
                     end
-                    // br=1 的 ts：阻塞后刷新 CUR_TS（占位：总是跳到 jump_target）
+                    // br=1 的 ts 已执行完：按分支结果刷新 CUR_TS（占位：总是跳到 jump_target）
                     T_BRWAIT: begin
                         if (served && (sel_rq == RQ_CSR)) begin
                             t_cur[t] <= r_jt[t];

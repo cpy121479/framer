@@ -101,9 +101,9 @@
 
 ```
 RTL 自检：LANE_SELFTEST 65536 组往返 OK（直通 0xABCD→ABCD，二操作数→0C0D）；
-          CHK ts 边界=4  err=0  出口KO=2  线程结束=2；EU err 检查 8 次全 0；tid0/tid1 CCR 0/0   SMOKE PASS
-池级冒烟：POOL_SMOKE_PASS  task=24 ts_done=12 thr_done=6 out_ko=6 ct_skip=0
-UVM：    CSR 4 次错 0；RF 4 次错 0；出口 KO 2 次错 0；EU 错误标志 dut=8 rm=8 次错 0；UVM_ERROR 0
+          CHK ts 边界=6  err=0  出口KO=2  线程结束=2；EU err 检查 12 次全 0；tid0/tid1 CCR 0/0   SMOKE PASS
+池级冒烟：POOL_SMOKE_PASS  task=36 ts_done=18 thr_done=6 out_ko=6 ct_skip=0
+UVM：    CSR 6 次错 0；RF 6 次错 0；出口 KO 2 次错 0；EU 错误标志 dut=12 rm=12 次错 0；UVM_ERROR 0
 ```
 
 ## 6. 注意
