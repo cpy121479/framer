@@ -66,11 +66,6 @@ module poe_thread_bank #(
     input  logic [TID_W-1:0] pre_tid,         // 预写哪个线程的 CW 窗
     input  logic [PRE_N-1:0] pre_strb,        // 每个表项一位（低 4 项）
     input  logic [PRE_N*CW_W-1:0] pre_data,   // 表项 e = pre_data[e*CW_W +: CW_W]
-    input  logic             csr_we,          // 平台线程侧 CSR 写使能
-    input  logic [TID_W-1:0] csr_wtid,        // 写哪个线程
-    input  logic [6:0]       csr_waddr,       // 写地址（字节偏移）
-    input  logic [2:0]       csr_ww,          // 写位宽码
-    input  logic [383:0]     csr_wdata,       // 写数据（低位对齐）
     // ---- 功能读口：MUX / EU 壳 / DMUX 共用（同一 task 期间三者要的是同一个 tid）----
     input  logic [TID_W-1:0]  csr_rtid,       // 读哪个线程的 CSR 全表
     output logic [CSRB*8-1:0] csr_rd,         // 该线程整份 CSR（0x00..0x59，组合读）
@@ -80,7 +75,8 @@ module poe_thread_bank #(
     input  logic [TID_W-1:0]  evt_rtid,       // ts_done 属于哪个线程
     output logic [RF_W-1:0]   evt_rf,         // 该线程整份 RF（组合读）
     output logic [CSRB*8-1:0] evt_csr,        // 该线程整份 CSR（组合读）
-    output logic [N_THR*8-1:0] th_stat_flat   // 每线程 TH_STAT（线程池功能用：64×8bit）
+    output logic [N_THR*8-1:0] th_stat_flat,  // 每线程 TH_STAT（线程池功能读）
+    output logic [N_THR*8-1:0] cur_ts_flat    // 每线程 CUR_TS（线程池功能读）
 );
     // ---- 地址常量（与文件头表一致；验证侧 poe_uvm_pkg 有同一份表）----
 
@@ -193,18 +189,6 @@ module poe_thread_bank #(
                 csr[ccr_wtid][int'(A_CCR)]      <= ccr_mirror[7:0];
                 csr[ccr_wtid][int'(A_CCR) + 1]  <= ccr_mirror[15:8];
             end
-            // 平台线程侧写：只有"同一拍又在 alloc 同一个 tid"才让位
-            if (csr_we && !(alloc && (alloc_tid == csr_wtid))) begin
-                // 注意：下标必须内联算（int'(..)+i），不要用循环体里声明的变量 ——
-                // 仿真器会把那种变量当单个静态变量，44 次 NBA 会全用最后一次的地址。
-                for (int i = 0; i < 44; i++)
-                    if ((i < nbytes(csr_ww)) && ((int'(csr_waddr) + i) < CSRB)) begin
-                        if ((int'(csr_waddr) + i) < CWB)
-                            csr[csr_wtid][int'(csr_waddr) + i] <= csr_wdata[i*8 +: 8];
-                        else
-                            cw[csr_wtid][(int'(csr_waddr) - CWB + i)*8 +: 8] <= csr_wdata[i*8 +: 8];
-                    end
-            end
             // EU 侧 CSR 写（通用口，CCR 就是地址 0x2）：与线程侧同一套落表逻辑，
             //   放在最后 → 同一拍同地址时 EU 优先。
             if (eu_csr_we && !(alloc && (alloc_tid == eu_csr_wtid))) begin
@@ -239,9 +223,11 @@ module poe_thread_bank #(
     assign evt_rf  = rf[evt_rtid];
     assign evt_csr = csr_view(evt_rtid);
 
-    // 线程池判断线程结束要连续看每个线程的 TH_STAT（只有 64×8bit，不占波形）
+    // 线程池功能读：每线程 TH_STAT / CUR_TS（各 64×8bit，不占波形）
     always_comb begin
-        for (int t = 0; t < N_THR; t++)
+        for (int t = 0; t < N_THR; t++) begin
             th_stat_flat[t*8 +: 8] = csr[t][int'(A_TH_STAT)];
+            cur_ts_flat[t*8 +: 8]  = csr[t][int'(A_CUR_TS)];
+        end
     end
 endmodule

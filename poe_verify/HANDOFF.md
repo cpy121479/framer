@@ -24,7 +24,7 @@
 | `rtl/poe_mux.sv` | MUX 级：32 fetcher 高位序取数 + 8 lane 移位 → 64B 窗；8×5bit CCR 提取 16bit 给 EU |
 | `rtl/poe_dmux.sv` | DMUX 级：8/4 lane 逆变换 + 32/16 fetcher deposit 回 RF/CCR64/O 窗 + 出口 KO |
 | `rtl/poe_thread_bank.sv` | 每线程一份 CSR（90B）+ RF（256B）+ CCR（64bit = 32×2bit） |
-| `rtl/poe_thr_pool.sv` | 线程池：建线程/取指/发 task/推 CUR_TS/事件；出口 KO 由 DMUX 直出，本模块收"已发出/已取走" |
+| `rtl/poe_thr_pool.sv` | 线程池：建线程/按 CSR.CUR_TS 取指/发 task/读 CSR.TH_STAT 收线程/事件；不写 CSR |
 | `rtl/poe_platform.sv` | 单边平台：把上面 + EU 装配成一份（DUT/RM 各一份） |
 | `rtl/poe_verify_top.sv` | RTL 自检顶层：两份平台 + 检查器（**只有 tb_top 用**） |
 | `rtl/poe_checker.sv` | RTL 自检的 ts 粒度比较器（**只有 tb_top 用**） |

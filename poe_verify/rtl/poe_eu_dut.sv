@@ -17,8 +17,9 @@
 //        mtvec[31:0]   → POE 0x16 MUX_PTR 低 32 位 （写；将来 mux 指针）
 //        mcycle        ← POE 0x5  SYS_TS           （只读）
 //      写侧只写"被 EU 改过的槽"，每拍最多一笔；CCR 走 ccr_out（不占这个 CSR 写口）。
-//   ③ 线程最后一条 task 完成后的下一拍，**EU 自己写 TH_STAT=DONE**
-//      （占位：真实设计里这条由微指令写，对平台呈现的接口形状不变）。
+//   ③ 每个 ts 最后一条 task 的结果拍，**EU 写 CUR_TS**（br ? jump_target : cur+1）；
+//      线程最后一条 task 的结果拍写 TH_STAT=DONE
+//      （占位：真实设计里这些由微指令写，对平台呈现的接口形状不变）。
 //
 // 今天的实情（写在文档里，别误解）：
 //   真实 EU RTL 还没接，这里**暂时例化同一份 sa-studio 参考模型**，
@@ -36,6 +37,9 @@ module poe_eu_dut #(
     input  logic [TID_W-1:0] task_tid,        // 该 task 属于哪个线程
     input  logic [3:0]       task_sub_pc,     // 微指令行号
     input  logic             task_last,       // 本 task 是该线程的最后一条
+    input  logic             task_ts_last,    // 本 task 是本 ts 的最后一条
+    input  logic             task_br,         // 本 ts 头 burst 的 br
+    input  logic [3:0]       task_jump,       // 本 ts 的 jump_target
     output logic             task_rdy,        // 能否收
     input  logic [WIN_W-1:0] win_in,          // 64B 操作数窗口（MUX 组好）
     output logic [WIN_W-1:0] win_out,         // 处理后的 64B 窗口
@@ -69,9 +73,6 @@ module poe_eu_dut #(
     logic [127:0]     rmw_in_w, rmw_out_w;    // RISC-V CSR 读改写束
     logic [127:0]     rmw_in_q;               // 该 task 收下时读到的 CSR 初值（判"改没改"用它）
     logic [63:0]      ro_regs_w;              // RISC-V 只读束
-    logic             last_v;                 // 已收下"最后一条 task"
-    logic [TID_W-1:0] last_tid_q;             // 它的线程号
-    logic             last_done;              // 上一拍完成的正是它
 
     assign task_rdy = ~busy;
     assign in_valid = task_vld & ~busy;
@@ -90,7 +91,7 @@ module poe_eu_dut #(
     assign out_win = out_regs[1023:512];
     assign done     = out_valid;
     assign done_tid = out_tid[TID_W-1:0];
-    assign csr_wtid = last_done ? last_tid_q : out_tid[TID_W-1:0];
+    assign csr_wtid = out_tid[TID_W-1:0];
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n)        busy <= 1'b0;
@@ -116,14 +117,21 @@ module poe_eu_dut #(
         csr_waddr = A_TH_STAT;
         csr_ww    = W8;
         csr_wdata = '0;
-        if (last_done) begin                                  // 线程结束：EU 自己写 TH_STAT=DONE
-            csr_we    = 1'b1;
-            csr_waddr = A_TH_STAT;
-            csr_ww    = W8;
-            csr_wdata = {376'd0, TH_DONE};
-        end else if (out_valid) begin
+        if (out_valid) begin
             // 注：CCR（mstatus 低 16bit）不在这里写 —— 走 ccr_out → DMUX → 64bit CCR + CSR 0x2 镜像
-            if (rmw_out_w[31:0] !== rmw_in_q[31:0]) begin     // mcause → TH_STAT
+            if (task_last) begin                              // 线程结束：EU 写 TH_STAT=DONE
+                csr_we    = 1'b1;
+                csr_waddr = A_TH_STAT;
+                csr_ww    = W8;
+                csr_wdata = {376'd0, TH_DONE};
+            end else if (task_ts_last) begin                  // ts 结束：EU 刷新 CUR_TS
+                csr_we    = 1'b1;
+                csr_waddr = A_CUR_TS;
+                csr_ww    = W8;
+                csr_wdata = {376'd0,
+                             task_br ? {{4{1'b0}}, task_jump}
+                                     : (csr_snap[8*int'(A_CUR_TS) +: 8] + 8'd1)};
+            end else if (rmw_out_w[31:0] !== rmw_in_q[31:0]) begin     // mcause → TH_STAT
                 csr_we    = 1'b1;
                 csr_waddr = A_TH_STAT;
                 csr_ww    = W8;
@@ -139,20 +147,6 @@ module poe_eu_dut #(
                 csr_ww    = W32;
                 csr_wdata = {352'd0, rmw_out_w[95:64]};
             end
-        end
-    end
-
-    // ---- 记住"最后一条 task"；它完成后的下一拍发那笔 TH_STAT 写 ----
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            last_v <= 1'b0; last_tid_q <= '0; last_done <= 1'b0;
-        end else begin
-            if (in_valid && task_last) begin
-                last_v     <= 1'b1;
-                last_tid_q <= task_tid;
-            end
-            if (last_done) last_v <= 1'b0;
-            last_done <= out_valid && last_v && (out_tid[TID_W-1:0] == last_tid_q);
         end
     end
 

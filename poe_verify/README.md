@@ -70,7 +70,7 @@ TESTNAME=poe_base_test ./run_uvm.sh     # UVM：2 个 KO，(tid,ts) 配对比对
   每个 `ts_done` 事件锁存一份**该线程**的快照：
   `obs_vld / obs_tid / obs_ts / obs_rf(2048bit) / obs_csr(720bit)`（约 2.8kbit，一拍有效）。
   UVM monitor 在 `obs_vld` 拍直接取走；RTL checker 比 DUT/RM 两份事件（要求同拍、同 tid、同 ts）。
-  线程池功能需要的 `TH_STAT` 仍保留一张小表 `64×8bit`（不属于观测总线）。
+  线程池功能需要的 `TH_STAT`/`CUR_TS` 仍保留小表 `64×8bit`（不属于观测总线）。
 - **两级存储**：宏指令存储是只读 ROM（模块内部 initial 拼镜像，无写口）；
   微指令存储（EU 内）、MUX 指令存储、DMUX 指令存储都需要 TB/test 预载；MUX/DMUX 指令存储物理独立。
 - **MUX/DMUX 指令行**（一行 = 一个 `sub_pc` 的完整画像，768bit，布局唯一定义在 `poe_pkg` ⑤ 节）：
@@ -82,8 +82,9 @@ TESTNAME=poe_base_test ./run_uvm.sh     # UVM：2 个 KO，(tid,ts) 配对比对
   ④ O 取数 16×11bit（slot k 为源、偏移为 deposit 目标）；⑤ O lane 4×15bit。
 - **CSR 所有权**：建线程初始化（含 `MUX_PTR` 默认值、CW 窗预发射）由平台写；
   运行期 `CCR` 走 `ccr_in/ccr_out → DMUX → 64bit CCR + CSR 0x2 镜像`；
-  `MUX_PTR`/`TH_STAT`/`CUR_TS` 走 EU 的通用 CSR 写口（其中 `TH_STAT=DONE` 由 EU 在末条 task 完成时写）；
-  `CUR_TS` 暂由线程池顺序推进（跳转微指令到位后切给 EU）。
+  `MUX_PTR`/`TH_STAT`/`CUR_TS` 走 EU 的通用 CSR 写口：EU 在 ts 最后一条 task 的结果拍写
+  `CUR_TS`（br 时写 jump_target，否则 cur+1），线程最后一条 task 写 `TH_STAT=DONE`；
+  **线程池只读 CSR 的 `CUR_TS`/`TH_STAT`，不写 CSR**。
 - **回刷契约**：EU 的 `done` 拍 `rf_out/rmw_out` 同拍有效，`poe_thread_bank` 同拍落表
   （不能再打一拍，否则线程池的下一条 task 会读到旧 RF）。
 - **EU 边界契约**：`task 握手 / 64B 窗口 in-out / 通用 CSR 读写 / done+done_tid /

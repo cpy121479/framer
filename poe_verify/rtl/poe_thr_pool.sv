@@ -9,22 +9,24 @@
 //     （ko_sent_vld/ko_sent_tid）与"被取走"（out_rdy），**两者都满足才释放线程槽**
 //
 // 结构（三块）：
-//   ① per-thread 状态数组：t_st / t_cur / t_bid / t_pri / t_age / t_ko ...
-//   ② 一套共享资源仲裁：每拍只服务**一个请求**（RQ_TASK / RQ_CSR / RQ_EVENT / RQ_KO），
+//   ① per-thread 状态数组：t_st / t_ts_idx / t_bid / t_pri / t_age / t_ko ...
+//   ② 一套共享资源仲裁：每拍只服务**一个请求**（RQ_TASK / RQ_EVENT / RQ_KO），
 //      所有请求统一按 (pri, age) 排序 —— 而不是每种资源各写一套仲裁
-//   ③ "每个状态产生什么请求"的 case（T_ISS 发 task、T_TSEND 发 ts_done+写 CUR_TS ...）
+//   ③ "每个状态产生什么请求"的 case（T_ISS 发 task、T_TSEND 发 ts_done ...）
 //
 // 取指：行为模型，多读口组合读（row_flat 每线程一拍返回整行），因此没有取指状态、
 //       也不需要每线程取指缓存。真实 RTL 若 ROM 端口受限，只需改 poe_burst_imem。
 //
-// CUR_TS：t_cur 是线程引擎的取指指针（唯一权威），同拍镜像写 CSR 0xe 供校验/观测；
-//         bank 只存副本，不回读，因此这里没有"取指绕一圈 CSR 再回来"的延迟。
-//         末 ts 不再推进：线程结束时 CUR_TS 停在最后一个 ts（不写 t_cur+1）。
+// CUR_TS/TH_STAT：**CSR 是唯一权威，由 EU 壳在 ts 结束/线程结束时写**；线程池只读：
+//   · 取指行号 = base_ts + CSR.CUR_TS；
+//   · T_TSEND 发 ts_done 后读 CSR.TH_STAT：DONE → T_DONE，否则用新的 CUR_TS 取下一个 ts；
+//   · 线程池不再写任何 CSR 表项。
 // 事件：ts_done / thr_done 只在被服务的下一拍各拉高**一拍**，避免仲裁排队时重复计数。
 //
 // 占位（接真实 EU 后替换，平台其它部分不动）：
-//   · br=1 的 ts **先正常执行完本 ts**；T_TSEND 后进入 T_BRWAIT，等跳转结果刷新 CUR_TS，
-//     下一个 ts 在跳转完成前不执行；跳转落点取自镜像行的 jump_target 字段（当前总是跳）
+//   · br=1 的 ts **先正常执行完本 ts**；ts 最后一条 task 带 br/jump_target 给 EU，
+//     由 EU 在结果拍写 CSR.CUR_TS（占位：br ? jump_target : cur_ts+1）；
+//     下一个 ts 在 EU 刷新 CUR_TS 前不执行（池子读 CSR 的新值）
 //   · c_task（bt=1）不发 EU，直接跳过并计数（等 SMC 通路）
 //   注意：跳转落点那一行的头 burst 必须是 br=0，否则会再次阻塞（占位实现的限制）
 // ============================================================================
@@ -49,22 +51,20 @@ module poe_thr_pool #(
     output logic             alloc,
     output logic [TID_W-1:0] alloc_tid,
     output logic [15:0]      alloc_base_ts,
-    // ---- CSR 写口（单口）----
-    output logic             csr_we,
-    output logic [TID_W-1:0] csr_wtid,
-    output logic [6:0]       csr_waddr,
-    output logic [2:0]       csr_ww,
-    output logic [383:0]     csr_wdata,
     // ---- task 出口（共享 EU，单口）----
     output logic             task_vld,
     output logic [TID_W-1:0] task_tid,
     output logic [3:0]       task_sub_pc,       // 示例 EU 只吃 4bit（真实 sub_pc 8bit）
     output logic             task_last,         // 本 task 是该线程最后一条（EU 壳据此占位写 TH_STAT）
+    output logic             task_ts_last,      // 本 task 是本 ts 最后一条（EU 壳据此写 CUR_TS）
+    output logic             task_br,           // 本 ts 头 burst 的 br
+    output logic [TS_W-1:0]  task_jump,         // 本 ts 的 jump_target（br 时用）
     input  logic             task_rdy,
     input  logic             eu_done,
     input  logic [TID_W-1:0] eu_done_tid,
     // ---- CSR 观测（线程结束由 EU 写 TH_STAT，池子只看不写）----
-    input  logic [N_THR*8-1:0] th_stat_flat,    // 每线程 TH_STAT：tid*8 +: 8
+    input  logic [N_THR*8-1:0] th_stat_flat,    // 每线程 TH_STAT（EU 写，池子读）
+    input  logic [N_THR*8-1:0] cur_ts_flat,     // 每线程 CUR_TS（EU 写，池子读）
     // ---- 出口 KO：由 DMUX 直出，池子只收"已发出/已取走"两个信息 ----
     input  logic             ko_sent_vld,     // 出口 KO 已发出（DMUX 的 out_vld，一拍）
     input  logic [TID_W-1:0] ko_sent_tid,     // 属于哪个线程
@@ -83,14 +83,16 @@ module poe_thr_pool #(
     output logic [7:0]       ct_skip_cnt
 );
     // ---- 状态与请求类型 ----
-    typedef enum logic [2:0] { T_IDLE, T_ISS, T_WAIT, T_TSEND, T_BRWAIT, T_DONE, T_OUT } t_st_e;
-    localparam logic [2:0] RQ_NONE = 3'd0, RQ_TASK = 3'd1, RQ_CSR = 3'd2, RQ_EVENT = 3'd3, RQ_KO = 3'd4;
+    typedef enum logic [2:0] { T_IDLE, T_ISS, T_WAIT, T_TSEND, T_DONE, T_OUT } t_st_e;
+    localparam logic [2:0] RQ_NONE = 3'd0, RQ_TASK = 3'd1, RQ_EVENT = 3'd2, RQ_KO = 3'd3;
     localparam int BIDX_W = $clog2(N_BURST);   // burst 下标位宽（N_BURST=8 → 3bit）
 
     t_st_e           t_st   [N_THR];   // 每线程状态
     logic [1:0]      t_ph   [N_THR];   // 多请求状态的相位（0/1）
     logic [TS_W-1:0]  t_base[N_THR];   // 程序基址（KO 行2 POE_HEAD 的低 TS_W 位 = 宏指令存储行号）
-    logic [TS_W-1:0] t_cur  [N_THR];   // 线程自己的 ts 指针
+    logic [TS_W-1:0] t_ts_idx[N_THR]; // 本 ts 的序号（ts_done 事件用；取指用 CSR.CUR_TS）
+    logic [3:0]      t_n    [N_THR];  // 本 ts 的有效 burst 条数（CUR_TS 刷新后行会变，必须锁存）
+    logic            t_ld   [N_THR];  // 本 ts 的行元数据是否已锁存（每个 ts 先锁一拍）
     logic [3:0]      t_bid  [N_THR];   // 本 ts 已发到第几条 burst
     logic [2:0]      t_pri  [N_THR];   // 线程优先级（0 最高）
     logic [15:0]     t_age  [N_THR];   // 进入顺序号（同级取最小 = 最老）
@@ -107,7 +109,8 @@ module poe_thr_pool #(
 
     always_comb begin
         for (int t = 0; t < N_THR; t++) begin
-            rd_ts_flat[t*TS_W +: TS_W] = t_base[t] + t_cur[t];      // 取指行号
+            // 取指行号 = 程序基址 + CSR.CUR_TS（CSR 是唯一权威，由 EU 写）
+            rd_ts_flat[t*TS_W +: TS_W] = t_base[t] + cur_ts_flat[t*8 +: TS_W];
             r_n[t]    = row_flat[t*TD_ROW_W + TD_N_LSB  +: 4];
             r_last[t] = row_flat[t*TD_ROW_W + TD_LAST];
             r_jt[t]   = row_flat[t*TD_ROW_W + TD_JTGT_LSB +: TS_W];
@@ -118,37 +121,18 @@ module poe_thr_pool #(
 
     // ---- 每个状态产生什么请求（组合）----
     logic [2:0] t_rq [N_THR];
-    logic [6:0] t_csr_a  [N_THR];      // CSR 写地址
-    logic [2:0] t_csr_w  [N_THR];      // CSR 写位宽码
-    logic [15:0] t_csr_d [N_THR];      // CSR 写数据（TH_STAT / CUR_TS 都是小字段）
 
     always_comb begin
         for (int t = 0; t < N_THR; t++) begin
-            t_rq[t]    = RQ_NONE;
-            t_csr_a[t] = A_CUR_TS;
-            t_csr_w[t] = W8;
-            t_csr_d[t] = {{(16-TS_W){1'b0}}, t_cur[t]};
+            t_rq[t] = RQ_NONE;
             case (t_st[t])
                 T_ISS: begin
-                    if (t_bid[t] >= r_n[t])            t_rq[t] = RQ_NONE;   // 本 ts 发完 → 转 T_TSEND
-                    else if (!r_b[t][t_bid[t][BIDX_W-1:0]][BF_BT]) t_rq[t] = RQ_TASK;   // i/v 才发 EU
+                    if (t_ld[t] && t_bid[t] < t_n[t] && !r_b[t][t_bid[t][BIDX_W-1:0]][BF_BT])
+                        t_rq[t] = RQ_TASK;   // i/v 才发 EU；c_task 在时序里直接跳过
                     // c_task：不发 EU，在时序里直接跳过
                 end
                 T_TSEND: begin
-                    if (t_ph[t] == 2'd0) t_rq[t] = RQ_EVENT;                 // 先发 ts_done
-                    else if (!r_last[t]) begin
-                        t_rq[t]    = RQ_CSR;                                 // 再写 CUR_TS = 下一个
-                        t_csr_a[t] = A_CUR_TS;
-                        t_csr_w[t] = W8;
-                        t_csr_d[t] = {{(16-TS_W){1'b0}}, t_cur[t] + 1'b1};
-                    end
-                    // 末 ts：不再推进 CUR_TS（线程结束时停在最后一个 ts），直接转 T_DONE
-                end
-                T_BRWAIT: begin
-                    t_rq[t]    = RQ_CSR;                                     // 阻塞后刷新 CUR_TS = 跳转落点
-                    t_csr_a[t] = A_CUR_TS;
-                    t_csr_w[t] = W8;
-                    t_csr_d[t] = {{(16-TS_W){1'b0}}, r_jt[t]};
+                    if (t_ph[t] == 2'd0) t_rq[t] = RQ_EVENT;  // 先发 ts_done；CUR_TS 已由 EU 写
                 end
                 T_DONE: begin
                     // 线程结束由 EU 写 CSR 0xa TH_STAT=DONE（占位：将来由微指令写）；
@@ -204,13 +188,11 @@ module poe_thr_pool #(
     assign task_tid    = sel_tid;
     assign task_sub_pc = r_b[sel_tid][t_bid[sel_tid][BIDX_W-1:0]][BF_SUBPC_LSB +: 4];
     // 本 task 是线程最后一条 = 末 ts（r_last）的最后一条 burst
-    assign task_last   = task_vld && r_last[sel_tid] && (t_bid[sel_tid] == (r_n[sel_tid] - 4'd1));
-
-    assign csr_we      = sel_vld && (sel_rq == RQ_CSR);
-    assign csr_wtid    = sel_tid;
-    assign csr_waddr   = t_csr_a[sel_tid];
-    assign csr_ww      = t_csr_w[sel_tid];
-    assign csr_wdata   = {368'd0, t_csr_d[sel_tid]};
+    assign task_last   = task_vld && r_last[sel_tid] && (t_bid[sel_tid] == (t_n[sel_tid] - 4'd1));
+    // 本 task 是本 ts 最后一条（包括线程最后一条）：EU 据此写 CUR_TS/TH_STAT
+    assign task_ts_last= task_vld && (t_bid[sel_tid] == (t_n[sel_tid] - 4'd1));
+    assign task_br     = task_vld && r_b[sel_tid][0][BF_ST] && r_b[sel_tid][0][BF_BR];
+    assign task_jump   = r_jt[sel_tid];
 
     // 事件是**寄存单拍脉冲**：仲裁排队时请求会保持，直接用组合输出会被重复采样。
     logic             ts_done_p, thr_done_p;
@@ -245,7 +227,9 @@ module poe_thr_pool #(
                 t_st[t]   <= T_IDLE;
                 t_ph[t]   <= 2'd0;
                 t_base[t] <= '0;
-                t_cur[t]  <= '0;
+                t_ts_idx[t] <= '0;
+                t_n[t]      <= '0;
+                t_ld[t]     <= 1'b0;
                 t_bid[t]  <= '0;
                 t_pri[t]  <= '0;
                 t_age[t]  <= '0;
@@ -267,7 +251,11 @@ module poe_thr_pool #(
                 case (t_st[t])
                     // 发本 ts 的 burst：i/v 发 EU；c_task 跳过；发完转 T_TSEND
                     T_ISS: begin
-                        if (t_bid[t] >= r_n[t]) begin
+                        if (!t_ld[t]) begin
+                            t_ts_idx[t] <= cur_ts_flat[t*8 +: TS_W];   // 锁存本 ts 序号（供 ts_done）
+                            t_n[t] <= r_n[t];                          // 锁存本 ts 条数
+                            t_ld[t] <= 1'b1;
+                        end else if (t_bid[t] >= t_n[t]) begin
                             t_ph[t] <= 2'd0;
                             t_st[t] <= T_TSEND;
                         end else if (r_b[t][t_bid[t][BIDX_W-1:0]][BF_BT]) begin
@@ -283,39 +271,24 @@ module poe_thr_pool #(
                     T_WAIT: begin
                         if (eu_done && (eu_done_tid == t[TID_W-1:0])) t_st[t] <= T_ISS;
                     end
-                    // ts 边界：先发 ts_done 事件；再按 br 决定跳转/顺序推进/收尾
+                    // ts 边界：先发 ts_done；CUR_TS/TH_STAT 已由 EU 在 ts 最后一条 task 写回
                     T_TSEND: begin
                         if (t_ph[t] == 2'd0) begin
                             if (served && (sel_rq == RQ_EVENT)) begin
                                 t_ph[t]       <= 2'd1;
                                 ts_done_p     <= 1'b1;
                                 ts_done_tid_r <= t[TID_W-1:0];
-                                ts_done_idx_r <= t_cur[t];
+                                ts_done_idx_r <= t_ts_idx[t];
                             end
-                        end else if (r_b[t][0][BF_ST] && r_b[t][0][BF_BR]) begin
-                            // br=1：本 ts 已执行完，先阻塞下一个 ts，等 T_BRWAIT 跳转结果
+                        end else begin
+                            // 读 EU 已刷新的 CSR：DONE 收线程，否则用新 CUR_TS 取下一个 ts
                             t_ph[t]  <= 2'd0;
                             t_bid[t] <= '0;
-                            t_st[t]  <= T_BRWAIT;
-                        end else if (served && (sel_rq == RQ_CSR)) begin
-                            // 进入下一个 ts：CUR_TS 推进 + bid 归零（否则会从"上个 ts 的条数"继续数）
-                            t_cur[t] <= t_cur[t] + 1'b1;   // 取指指针（唯一权威）
-                            t_ph[t]  <= 2'd0;
-                            t_bid[t] <= '0;
-                            t_st[t]  <= T_ISS;
-                        end else if (r_last[t]) begin
-                            // 末 ts：CUR_TS 保持不动，直接收线程
-                            t_ph[t]  <= 2'd0;
-                            t_bid[t] <= '0;
-                            t_st[t]  <= T_DONE;
-                        end
-                    end
-                    // br=1 的 ts 已执行完：按分支结果刷新 CUR_TS（占位：总是跳到 jump_target）
-                    T_BRWAIT: begin
-                        if (served && (sel_rq == RQ_CSR)) begin
-                            t_cur[t] <= r_jt[t];
-                            t_bid[t] <= '0;
-                            t_st[t]  <= T_ISS;
+                            t_ld[t]  <= 1'b0;
+                            if (th_stat_flat[t*8 +: 8] == TH_DONE)
+                                t_st[t] <= T_DONE;
+                            else
+                                t_st[t] <= T_ISS;
                         end
                     end
                     // 线程结束：等 EU 写完 TH_STAT=DONE，发 thr_done 事件
@@ -345,7 +318,9 @@ module poe_thr_pool #(
                 t_st[free_tid]   <= T_ISS;
                 t_ph[free_tid]   <= 2'd0;
                 t_base[free_tid] <= ko_data[KO_HEAD_LSB +: TS_W];
-                t_cur[free_tid]  <= '0;
+                t_ts_idx[free_tid] <= '0;
+                t_n[free_tid]      <= '0;
+                t_ld[free_tid]     <= 1'b0;
                 t_bid[free_tid]  <= '0;
                 t_pri[free_tid]  <= ko_data[KO_PRI_LSB +: KO_PRI_W];   // KO 行1 PRI，0 最高
                 t_age[free_tid]  <= age_cnt;

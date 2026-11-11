@@ -78,7 +78,7 @@ module poe_platform #(
     output logic [TS_W-1:0]  obs_ts,          // 快照对应哪个 ts（= ts_done_idx）
     output logic [RF_W-1:0]  obs_rf,          // 该线程整份 RF（256B）
     output logic [CSRB*8-1:0] obs_csr,        // 该线程整份 CSR（90B，含 0x2 CCR 镜像与 CW 窗）
-    // ---- 小表：线程池结束判定要连续看每个线程的 TH_STAT（64×8bit，不占波形）----
+    // ---- 小表：线程池要连续看每个线程的 TH_STAT/CUR_TS（各 64×8bit，不占波形）----
     output logic [N_THR*8-1:0] th_stat_flat   // 每线程 TH_STAT：tid*8 +: 8
 );
     // ---- 宏指令存储（= burst 存储）----
@@ -89,15 +89,14 @@ module poe_platform #(
     logic             alloc;                 // 建线程脉冲
     logic [TID_W-1:0] alloc_tid;             // 建到哪个槽
     logic [15:0]      alloc_base_ts;         // 程序基址（写 CSR 0xc PC_INTER）
-    logic             csr_we;                // 线程侧 CSR 写使能（当前只写 CUR_TS）
-    logic [TID_W-1:0] csr_wtid;              // CSR 写哪个线程
-    logic [6:0]       csr_waddr;             // CSR 字节地址
-    logic [2:0]       csr_ww;                // CSR 写位宽码
-    logic [383:0]     csr_wdata;             // CSR 写数据
     logic             task_vld;              // 池发出的 task 有效
     logic [TID_W-1:0] task_tid;              // task 属于哪个线程
     logic [3:0]       task_sub_pc;           // 微指令行号（= MUX 指令行号）
     logic             task_last;             // 本 task 是该线程最后一条
+    logic             task_ts_last;          // 本 task 是本 ts 最后一条
+    logic             task_br;               // 本 ts 头 burst 的 br
+    logic [TS_W-1:0]  task_jump;             // 本 ts 的 jump_target
+    logic [N_THR*8-1:0] cur_ts_flat;         // 每线程 CUR_TS（EU 写，池子读）
     logic             task_rdy;              // MUX 能否收（回池）
     logic             mux_task_done;         // MUX 完成一条 task（RF 已回写）
     logic [TID_W-1:0] mux_task_done_tid;     // 完成属于哪个线程
@@ -118,6 +117,9 @@ module poe_platform #(
     logic [TID_W-1:0]     mux_win_tid;       // 窗口属于哪个线程
     logic [3:0]           mux_win_sub_pc;    // 微指令行号
     logic                 mux_win_last;      // 本 task 是线程最后一条
+    logic                 mux_win_ts_last;   // 本 task 是本 ts 最后一条
+    logic                 mux_win_br;        // 本 ts 头 burst 的 br
+    logic [MUX_AW-1:0]    mux_win_jump;      // 本 ts 的 jump_target
     logic                 mux_win_rdy;       // EU 能否收窗口
     logic [TID_W-1:0]     mux_ctx_tid;       // 当前 task 上下文：线程号
     logic [MUX_AW-1:0]    mux_ctx_pc;        // 当前 task 上下文：行号
@@ -177,19 +179,18 @@ module poe_platform #(
         .alloc           (alloc),
         .alloc_tid       (alloc_tid),
         .alloc_base_ts   (alloc_base_ts),
-        .csr_we          (csr_we),
-        .csr_wtid        (csr_wtid),
-        .csr_waddr       (csr_waddr),
-        .csr_ww          (csr_ww),
-        .csr_wdata       (csr_wdata),
         .task_vld        (task_vld),
         .task_tid        (task_tid),
         .task_sub_pc     (task_sub_pc),
         .task_last       (task_last),
+        .task_ts_last    (task_ts_last),
+        .task_br         (task_br),
+        .task_jump       (task_jump),
         .task_rdy        (task_rdy),          // 由 MUX 给
         .eu_done         (mux_task_done),     // 一条 task 真正做完（RF/CCR 已回填）
         .eu_done_tid     (mux_task_done_tid),
         .th_stat_flat    (th_stat_flat),      // 线程结束由 EU 写 TH_STAT，池子只读
+        .cur_ts_flat     (cur_ts_flat),       // CUR_TS 也由 EU 写，池子只读
         .ko_sent_vld     (out_vld),           // 出口 KO 已由 DMUX 直出
         .ko_sent_tid     (out_tid),
         .out_rdy         (1'b1),              // 出口 KO 当拍交给 monitor/checker，视为已被取走
@@ -235,11 +236,6 @@ module poe_platform #(
         .pre_tid(pre_thid),
         .pre_strb(pre_strb),
         .pre_data(pre_data),
-        .csr_we(csr_we),
-        .csr_wtid(csr_wtid),
-        .csr_waddr(csr_waddr),
-        .csr_ww(csr_ww),
-        .csr_wdata(csr_wdata),
         .csr_rtid(mux_csr_rtid),        // 功能读口：MUX 给出当前 task 的 tid
         .csr_rd(csr_rd),                //   → MUX/EU/DMUX 共用这一份
         .rf_rd_tid(mux_rf_rd_tid),      // MUX 读整份 RF
@@ -247,7 +243,8 @@ module poe_platform #(
         .evt_rtid(evt_rtid),            // 事件读口：ts_done 线程
         .evt_rf(evt_rf),
         .evt_csr(evt_csr),
-        .th_stat_flat(th_stat_flat)     // 线程池功能用（64×8bit）
+        .th_stat_flat(th_stat_flat),    // 线程池功能读
+        .cur_ts_flat(cur_ts_flat)       // 线程池功能读
     );
 
     // ---- MUX 指令存储（TB/test 预载，与微指令画像配套）----
@@ -289,6 +286,9 @@ module poe_platform #(
         .task_tid      (task_tid),
         .task_sub_pc   (task_sub_pc),
         .task_last     (task_last),
+        .task_ts_last  (task_ts_last),
+        .task_br       (task_br),
+        .task_jump     (task_jump),
         .task_rdy      (task_rdy),
         .mux_rd_addr   (mux_rd_addr),
         .mux_row       (mux_row),
@@ -302,6 +302,9 @@ module poe_platform #(
         .win_tid       (mux_win_tid),
         .win_sub_pc    (mux_win_sub_pc),
         .win_last      (mux_win_last),
+        .win_ts_last   (mux_win_ts_last),
+        .win_br        (mux_win_br),
+        .win_jump      (mux_win_jump),
         .win_data      (mux_win_data),
         .win_ccr       (mux_win_ccr),
         .win_rdy       (mux_win_rdy),
@@ -375,6 +378,9 @@ module poe_platform #(
                 .task_tid(mux_win_tid),
                 .task_sub_pc(mux_win_sub_pc),
                 .task_last(mux_win_last),
+                .task_ts_last(mux_win_ts_last),
+                .task_br(mux_win_br),
+                .task_jump(mux_win_jump),
                 .task_rdy(mux_win_rdy),
                 .win_in(mux_win_data),
                 .win_out(eu_win_out),
@@ -403,6 +409,9 @@ module poe_platform #(
                 .task_tid(mux_win_tid),
                 .task_sub_pc(mux_win_sub_pc),
                 .task_last(mux_win_last),
+                .task_ts_last(mux_win_ts_last),
+                .task_br(mux_win_br),
+                .task_jump(mux_win_jump),
                 .task_rdy(mux_win_rdy),
                 .win_in(mux_win_data),
                 .win_out(eu_win_out),

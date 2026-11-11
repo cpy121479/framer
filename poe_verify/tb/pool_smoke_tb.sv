@@ -50,19 +50,18 @@ module pool_smoke_tb;
     logic                  alloc;                  // 建线程脉冲
     logic [TID_W-1:0]      alloc_tid;              // 建到哪个槽
     logic [15:0]           alloc_base_ts;          // 程序基址（写 CSR 0xc PC_INTER）
-    logic                  csr_we;                 // 线程侧 CSR 写使能
-    logic [TID_W-1:0]      csr_wtid;               // CSR 写哪个线程
-    logic [6:0]            csr_waddr;              // CSR 字节地址
-    logic [2:0]            csr_ww;                 // CSR 写位宽码
-    logic [383:0]          csr_wdata;              // CSR 写数据
     logic                  task_vld;               // task 出口有效
     logic [TID_W-1:0]      task_tid;               // task 属于哪个线程
     logic [3:0]            task_sub_pc;            // 微指令行号（示例 EU 只吃 4bit）
     logic                  task_last;              // 本 task 是该线程最后一条
+    logic                  task_ts_last;           // 本 task 是本 ts 最后一条
+    logic                  task_br;                // 本 ts 头 burst 的 br
+    logic [TS_W-1:0]       task_jump;              // 本 ts 的 jump_target
     logic                  task_rdy;               // 假 EU 能否收
     logic                  eu_done;                // 假 EU 完成脉冲
     logic [TID_W-1:0]      eu_done_tid;            // 完成 pulse 属于哪个线程
     logic [N_THR*8-1:0]    th_stat_flat;           // 每线程 TH_STAT（假 EU 代写，池子只读）
+    logic [N_THR*8-1:0]    cur_ts_flat;            // 每线程 CUR_TS（假 EU 代写，池子只读）
     // 出口 KO 由 DMUX 直出（本冒烟用"假 DMUX"在结果拍给一拍脉冲）；池子只收"已发出/已取走"
     logic                  ko_sent_vld;            // 出口 KO 已发出（假 DMUX 给）
     logic [TID_W-1:0]      ko_sent_tid;            // 属于哪个线程
@@ -93,19 +92,18 @@ module pool_smoke_tb;
         .alloc           (alloc),           // 建线程脉冲
         .alloc_tid       (alloc_tid),       // 建到哪个槽
         .alloc_base_ts   (alloc_base_ts),   // 程序基址
-        .csr_we          (csr_we),          // CSR 写使能
-        .csr_wtid        (csr_wtid),        // CSR 写线程号
-        .csr_waddr       (csr_waddr),       // CSR 写地址
-        .csr_ww          (csr_ww),          // CSR 写位宽码
-        .csr_wdata       (csr_wdata),       // CSR 写数据
         .task_vld        (task_vld),        // task 出口有效
         .task_tid        (task_tid),        // task 属于哪个线程
         .task_sub_pc     (task_sub_pc),     // 微指令行号
         .task_last       (task_last),       // 本 task 是该线程最后一条
+        .task_ts_last    (task_ts_last),    // 本 task 是本 ts 最后一条
+        .task_br         (task_br),         // 本 ts 头 burst 的 br
+        .task_jump       (task_jump),       // 本 ts 的 jump_target
         .task_rdy        (task_rdy),        // 假 EU 能否收
         .eu_done         (eu_done),         // 假 EU 完成
         .eu_done_tid     (eu_done_tid),     // 完成属于哪个线程
         .th_stat_flat    (th_stat_flat),    // 线程结束状态（EU 写，池子读）
+        .cur_ts_flat     (cur_ts_flat),     // CUR_TS（EU 写，池子读）
         .ko_sent_vld     (ko_sent_vld),     // 出口 KO 已发出（由 DMUX 直出，池子只收事件）
         .ko_sent_tid     (ko_sent_tid),     // 属于哪个线程
         .out_rdy         (out_rdy),         // 下游能否收
@@ -141,7 +139,11 @@ module pool_smoke_tb;
     logic [4:0]       eu_cnt;
     logic             eu_done_r;
     logic             eu_last;            // 当前占用的这条 task 是不是线程最后一条
+    logic             eu_ts_last;         // 当前 task 是否本 ts 最后一条
+    logic             eu_br;              // 当前 ts 的 br
+    logic [TS_W-1:0]  eu_jump;            // 当前 ts 的 jump_target
     logic [7:0]       th_stat_q [N_THR];  // 模拟 CSR 0xa：EU 写完，池子读
+    logic [7:0]       cur_ts_q  [N_THR];  // 模拟 CSR 0xf：EU 写完，池子读
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -150,20 +152,38 @@ module pool_smoke_tb;
             eu_cnt    <= '0;
             eu_done_r <= 1'b0;
             eu_last   <= 1'b0;
-            for (int t = 0; t < N_THR; t++) th_stat_q[t] <= 8'h01;   // 建线程后 RUN
+            eu_ts_last <= 1'b0;
+            eu_br      <= 1'b0;
+            eu_jump    <= '0;
+            for (int t = 0; t < N_THR; t++) begin
+                th_stat_q[t] <= 8'h01;
+                cur_ts_q[t]  <= 8'd0;
+            end
         end else begin
             eu_done_r <= 1'b0;                      // 完成是单拍脉冲
+            if (alloc) begin                        // 新建线程：CUR_TS=0、TH_STAT=RUN
+                cur_ts_q[alloc_tid]  <= 8'd0;
+                th_stat_q[alloc_tid] <= TH_RUN;
+            end
             if (!eu_busy) begin
                 if (task_vld && task_rdy) begin     // 收下一条 task
                     eu_busy <= 1'b1;
                     eu_tid  <= task_tid;
                     eu_last <= task_last;
+                    eu_ts_last <= task_ts_last;
+                    eu_br      <= task_br;
+                    eu_jump    <= task_jump;
                     eu_cnt  <= '0;
                 end
             end else if (eu_cnt == EU_LAT-1) begin  // 占用期满 → 回 done
                 eu_busy   <= 1'b0;
                 eu_done_r <= 1'b1;
-                if (eu_last) th_stat_q[eu_tid] <= TH_DONE;   // 末条 task：模拟 EU 写 TH_STAT=DONE
+                if (eu_last) begin
+                    th_stat_q[eu_tid] <= TH_DONE;            // 末条 task：模拟 EU 写 TH_STAT=DONE
+                end else if (eu_ts_last) begin
+                    cur_ts_q[eu_tid] <= eu_br ? {{(8-TS_W){1'b0}}, eu_jump}
+                                              : (cur_ts_q[eu_tid] + 8'd1);
+                end
             end else begin
                 eu_cnt <= eu_cnt + 5'd1;
             end
@@ -171,8 +191,10 @@ module pool_smoke_tb;
     end
 
     always_comb
-        for (int t = 0; t < N_THR; t++)
+        for (int t = 0; t < N_THR; t++) begin
             th_stat_flat[t*8 +: 8] = th_stat_q[t];
+            cur_ts_flat[t*8 +: 8]  = cur_ts_q[t];
+        end
 
     assign task_rdy    = eu_ready && !eu_busy;   // 假 EU 一次只收一条
     assign eu_done     = eu_done_r;

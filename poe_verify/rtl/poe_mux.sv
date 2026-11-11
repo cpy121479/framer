@@ -34,6 +34,9 @@ module poe_mux #(
     input  logic [TID_W-1:0] task_tid,        // 属于哪个线程
     input  logic [AW-1:0]    task_sub_pc,     // MUX 指令行号
     input  logic             task_last,       // 本 task 是线程最后一条
+    input  logic             task_ts_last,    // 本 task 是本 ts 最后一条
+    input  logic             task_br,         // 本 ts 头 burst 的 br
+    input  logic [AW-1:0]    task_jump,       // 本 ts 的 jump_target
     output logic             task_rdy,        // MUX 能收（空闲）
     output logic [AW-1:0]        mux_rd_addr, // 读哪一行
     input  logic [MUX_ROW_W-1:0] mux_row,     // 该行整行指令
@@ -48,6 +51,9 @@ module poe_mux #(
     output logic [TID_W-1:0] win_tid,         // 属于哪个线程
     output logic [AW-1:0]    win_sub_pc,      // 行号
     output logic             win_last,        // 本 task 是线程最后一条
+    output logic             win_ts_last,     // 本 task 是本 ts 最后一条
+    output logic             win_br,          // 本 ts 头 burst 的 br
+    output logic [AW-1:0]    win_jump,        // 本 ts 的 jump_target
     output logic [WIN_W-1:0] win_data,        // 64B 窗
     output logic [15:0]      win_ccr,         // 8×2bit CCR（16bit）
     input  logic             win_rdy,         // EU 能否收
@@ -66,6 +72,9 @@ module poe_mux #(
     logic [TID_W-1:0] tid_q;
     logic [AW-1:0]    pc_q;
     logic             last_q;
+    logic             ts_last_q;
+    logic             br_q;
+    logic [AW-1:0]    jump_q;
     logic             done_r;
     logic [TID_W-1:0] done_tid_r;
     logic [WIN_W-1:0] win_c;
@@ -97,6 +106,9 @@ module poe_mux #(
     assign win_tid      = tid_q;
     assign win_sub_pc   = pc_q;
     assign win_last     = last_q;
+    assign win_ts_last  = ts_last_q;
+    assign win_br       = br_q;
+    assign win_jump     = jump_q;
     assign win_data     = win_c;
     assign win_ccr      = ccr_c;
     assign ctx_tid      = tid_q;
@@ -112,6 +124,9 @@ module poe_mux #(
             tid_q <= '0;
             pc_q <= '0;
             last_q <= 1'b0;
+            ts_last_q <= 1'b0;
+            br_q <= 1'b0;
+            jump_q <= '0;
             done_r <= 1'b0;
             done_tid_r <= '0;
         end else begin
@@ -122,6 +137,9 @@ module poe_mux #(
                     tid_q  <= task_tid;
                     pc_q   <= task_sub_pc;
                     last_q <= task_last;
+                    ts_last_q <= task_ts_last;
+                    br_q   <= task_br;
+                    jump_q <= task_jump;
                 end
                 M_PRESENT: if (win_rdy) st <= M_RUN;
                 M_RUN: if (eu_done && (eu_done_tid == tid_q)) begin
